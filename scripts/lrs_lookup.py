@@ -52,3 +52,38 @@ def get_grpo_python_lr(model: str):
         if lr["h"] == hashed_model:
             return lr["lr"]
     return None
+
+
+def read_csv_ar(path: str):
+    with open(path, "r") as f:
+        lines = [line.strip() for line in f if len(line.strip()) > 0]
+    result = []
+    for line in lines[1: ]: # Skip the header
+        parts = line.split(",")
+        result.append({
+            "size": int(parts[0]),
+            "ar": parts[1].strip().lower(),
+            "lr": float(parts[2])
+        })
+    return result
+
+INSTRUCT_AR_CONFIG = read_csv_ar(os.path.join(current_dir, "lrs/instruct_ar.csv"))
+DPO_AR_CONFIG = read_csv_ar(os.path.join(current_dir, "lrs/dpo_ar.csv"))
+
+
+def get_lr_from_ar(architecture: str, param_nums: int, list_config: list):
+    # find the closest config from INSTRUCT_AR_CONFIG
+    filtered_configs = [config for config in list_config if config["ar"] == architecture.lower()]
+    if len(filtered_configs) == 0:
+        return None
+    closest_config = min(filtered_configs, key=lambda x: abs(x["size"] - param_nums))
+    print(f"Using lr from ar: {closest_config['lr']} for architecture: {architecture} and size: {param_nums}", flush=True)
+    return closest_config["lr"]
+
+
+def get_lr_from_ar_dpo(architecture: str, param_nums: int):
+    return get_lr_from_ar(architecture.lower().strip(), param_nums, DPO_AR_CONFIG)
+
+
+def get_lr_from_ar_instruct(architecture: str, param_nums: int):
+    return get_lr_from_ar(architecture.lower().strip(), param_nums, INSTRUCT_AR_CONFIG)

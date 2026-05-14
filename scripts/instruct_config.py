@@ -7,7 +7,7 @@ from model_utility import (
     get_gpu_count,
 )
 from copy import deepcopy
-from lrs_lookup import get_instruct_lr
+from lrs_lookup import get_instruct_lr, get_lr_from_ar_instruct
 
 
 FIXED_BS_CONFIG = {
@@ -277,7 +277,11 @@ def get_training_json(train_info: dict) -> dict:
             print(f"Using lr from lk: {lr}", flush=True)
             run_config["learning_rate"] = lr
         else:
-            print(f"Using lr from config: {run_config['learning_rate']}", flush=True)
+            # print(f"Using lr from config: {run_config['learning_rate']}", flush=True)
+            lr = get_lr_from_ar_instruct(model_architecture, param_nums)
+            if lr is not None:
+                print(f"Using lr from ar: {lr} for architecture: {model_architecture} and size: {param_nums}", flush=True)
+                run_config["learning_rate"] = lr
 
     run_config["learning_rate"] *= train_info["reg_ratio"]
     run_cmd = get_run_cmd(run_config, run_config["gpu_nums"])
