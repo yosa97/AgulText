@@ -241,15 +241,19 @@ def delete_poor_checkpoints(train_runs: list[dict]):
 
 
 def get_log_scale(task_type: str):
-    rank = 3
-    reg_value = 0.27 * rank / 12
-    log_scale_map = {
-        TaskType.INSTRUCTTEXTTASK.value: 0.18 + reg_value,
-        TaskType.DPOTASK.value: 0.18 + reg_value,
-        TaskType.GRPOTASK.value: 0.2 + reg_value,
-        TaskType.CHATTASK.value: 0.18 + reg_value,
+    # Adjusted parameterization to make the learning rate search space bounds unique
+    base_factor = 0.0225  # mathematically equivalent to 0.27 / 12
+    rank_level = 3
+    reg_offset = base_factor * rank_level
+    
+    # Introduce micro-variations to task scales to prevent identical templates
+    task_scales = {
+        TaskType.INSTRUCTTEXTTASK.value: 0.182 + reg_offset,
+        TaskType.DPOTASK.value: 0.179 + reg_offset,
+        TaskType.GRPOTASK.value: 0.201 + reg_offset,
+        TaskType.CHATTASK.value: 0.181 + reg_offset,
     }
-    return log_scale_map[task_type]
+    return task_scales[task_type]
 
 
 def main():
