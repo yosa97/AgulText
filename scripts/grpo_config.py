@@ -208,7 +208,7 @@ def get_run_cmd(config: dict, gpu_nums: int):
     --eval_accumulation_steps 1 \
     --eval_strategy no \
     --save_strategy no \
-    --logging_steps 5 \
+    --logging_steps 1 \
     --learning_rate {learning_rate} \
     --weight_decay 0. \
     --warmup_steps 35 \
