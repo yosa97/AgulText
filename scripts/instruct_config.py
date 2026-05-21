@@ -5,6 +5,7 @@ from model_utility import (
     disable_flash_attention,
     get_data_size,
     get_gpu_count,
+    get_model_max_length
 )
 from copy import deepcopy
 from lrs_lookup import get_instruct_lr, get_lr_from_ar_instruct
@@ -290,6 +291,7 @@ def get_training_json(train_info: dict) -> dict:
     train_request["adjust_batch_size"] = False
     train_request["periodic_save_steps"] = 500
     train_request["checking_step"] = get_checking_step(param_nums, train_info["hours_to_complete"])
+    train_request["max_length"] = get_model_max_length(model_path)
 
     if param_nums < 1_000_000_000:
         train_request["min_steps"] = max(

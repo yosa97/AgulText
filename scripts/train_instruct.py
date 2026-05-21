@@ -3,6 +3,7 @@ import requests
 import json
 import random
 from utility import log_info, MyDataset
+from tokenizer_safe import safe_load_tokenizer
 from transformers.trainer_utils import get_last_checkpoint
 from transformers import AutoTokenizer, BitsAndBytesConfig
 import transformers
@@ -198,7 +199,7 @@ def main():
     # log_info(f"Training request: {train_request}", "start")
     task_id = train_request["task_id"]
 
-    tokenizer = AutoTokenizer.from_pretrained(train_request["model_path"])
+    tokenizer = safe_load_tokenizer(train_request["model_path"])
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     

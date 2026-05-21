@@ -8,6 +8,7 @@ import utility
 from datasets import Dataset
 from datetime import timezone
 from utility import log_info
+from tokenizer_safe import safe_load_tokenizer
 from transformers import AutoTokenizer, BitsAndBytesConfig
 import transformers
 import torch
@@ -28,7 +29,7 @@ import traceback
 from transformers import TrainerCallback
 import argparse
 import math
-from customized_trainer import resize_if_needed, set_generation_config, CustomEvalSaveCallback, WhenToEvalHandler, init_wandb
+from customized_trainer import resize_if_needed, set_generation_config, CustomEvalSaveCallback, WhenToEvalHandler, init_wandb, GRPOCustomEvalSaveCallback
 from transformers.modeling_utils import is_deepspeed_zero3_enabled
 import os
 import glob
@@ -330,7 +331,7 @@ def main():
     # log_info(f"Training request: {train_request}", "start")
     # first download the dataset from the URL, save it as data.json
     output_dir = training_args.output_dir
-    tokenizer = AutoTokenizer.from_pretrained(train_request["model_path"])
+    tokenizer = safe_load_tokenizer(train_request["model_path"])
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
@@ -464,7 +465,7 @@ def main():
         processing_class=tokenizer,
         peft_config=peft_config,
         callbacks=[
-            CustomEvalSaveCallback(
+            GRPOCustomEvalSaveCallback(
                 WhenToEvalHandler(train_request["end_time"], train_request["save_before_remaining_time"], periodic_save_steps=periodic_save_steps, steps_per_epoch=total_steps_per_epoch, max_steps=max_steps),
                 train_request["submission_dir"],
                 training_args.output_dir,

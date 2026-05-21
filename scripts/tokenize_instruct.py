@@ -16,6 +16,7 @@ import requests
 import os
 import shutil
 import typer
+from tokenizer_safe import safe_load_tokenizer
 
 
 def _process_custom_dataset_fields(custom_type_dict: dict) -> dict:
@@ -262,7 +263,7 @@ def main(training_request_path: str):
     )
     
     config_path = "test_axolotl.yml"
-    tokenizer = AutoTokenizer.from_pretrained(
+    tokenizer = safe_load_tokenizer(
         training_request["train_request"]["model_path"]
     )
     if tokenizer.pad_token is None:

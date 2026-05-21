@@ -418,6 +418,8 @@ def main():
     count = 0
     while True:
         state = get_state()
+        if state.get("mode") == "finish":
+            break
         train_cmd = original_train_cmd  # will replace based on the state later
         c_train_info = copy.deepcopy(train_info)
         final_output_dir = None

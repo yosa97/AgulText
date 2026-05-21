@@ -11,6 +11,7 @@ import torch
 import os
 import json
 import torch
+from math import ceil
 
 MODEL_CONFIG = {
     "facebook/opt-1.3b": {"model_size": 1_300_000_000},
@@ -163,6 +164,19 @@ def get_gradient_checkpointing(model: str) -> str:
         return "False"
     return "True"
 
+def get_model_max_length(model_path: str, fallback: int = 4096) -> int:
+    try:
+        config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+        for attr in ("max_position_embeddings", "n_positions", "max_sequence_length"):
+            val = getattr(config, attr, None)
+            if val:
+                value = min(4096, ceil(val / 2))
+                print(f"get_model_max_length: {value} (min(4096, ceil({val}/2)))", flush=True)
+                return value
+        return fallback
+    except Exception as e:
+        print(f"Could not get max length from config: {e}", flush=True)
+        return fallback
 
 def get_data_size(data_path: str) -> int:
     with open(data_path, "r") as f:

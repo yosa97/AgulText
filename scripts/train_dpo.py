@@ -5,6 +5,7 @@ import random
 import utility
 from datasets import Dataset
 from utility import log_info
+from tokenizer_safe import safe_load_tokenizer
 from transformers import AutoTokenizer, BitsAndBytesConfig
 from transformers.trainer_utils import get_last_checkpoint
 import transformers
@@ -142,7 +143,7 @@ def main():
     # log_info(f"Training request: {train_request}", "start")
     # first download the dataset from the URL, save it as data.json
     output_dir = training_args.output_dir
-    tokenizer = AutoTokenizer.from_pretrained(train_request["model_path"])
+    tokenizer = safe_load_tokenizer(train_request["model_path"])
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 

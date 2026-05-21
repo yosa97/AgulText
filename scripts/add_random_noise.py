@@ -1,18 +1,19 @@
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import os
-import typer 
+import typer
 from transformers import GenerationConfig
 from huggingface_hub import HfApi
 from transformers import AutoConfig
-import json 
+import json
 import datetime
+from tokenizer_safe import safe_load_tokenizer
 # Configuration
 
 def main(model_path: str, save_folder: str):
     model = AutoModelForCausalLM.from_pretrained(model_path, torch_dtype=torch.bfloat16, device_map="auto")
     model.generation_config = GenerationConfig(temperature=None, top_p=None)
-    tokenizer = AutoTokenizer.from_pretrained(model_path)
+    tokenizer = safe_load_tokenizer(model_path)
     noise_std = 0.01
 
     # Step 2: Add random noise to the input embeddings
