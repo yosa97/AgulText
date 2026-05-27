@@ -15,7 +15,7 @@ from transformers.trainer_utils import is_main_process
 import wandb
 import torch
 from state_manager import get_state, set_state
-MAX_TRIES = 9
+MAX_TRIES = 12
 
 
 VALIDATOR_BETA = 0.5
@@ -101,8 +101,8 @@ class CustomEvalSaveCallback(TrainerCallback):
             # n * time_so_far + (time_so_far + total_remaining_training_time) = total_remaining_time
             # time_so_far + total_remaining_training_time is the time it takes to finish the training (need to estimate the eval time and save time, assuming this is 15 minutes)
             # assuming time_so_far is + 5 minutes, just in case the checking step takes more time than expected
-            max_var_time_sofar = 3 * 60
-            n = (total_remaining_time - (time_so_far + total_remaining_training_time + 12 * 60)) / (time_so_far + max_var_time_sofar) # 300 = 5 minutes, assume that it extra time would be more or less 5 minutes
+            max_var_time_sofar = 2 * 60
+            n = (total_remaining_time - (time_so_far + total_remaining_training_time + 10 * 60)) / (time_so_far + max_var_time_sofar) # reduce buffer to fit more LR experiments
             n = int(n)
             my_state["check_details"] = {
                 "now": str(now.strftime("%Y-%m-%d %H:%M:%S")),

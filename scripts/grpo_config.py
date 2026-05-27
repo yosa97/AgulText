@@ -9,7 +9,7 @@ from model_utility import (
 )
 from copy import deepcopy
 from lrs_lookup import get_grpo_lr, get_grpo_python_lr
-allow_find_lk_lr = False
+allow_find_lk_lr = True
 
 GRPO_CONFIG = {
     "0_1_b": {
@@ -259,7 +259,7 @@ def get_training_json(train_info: dict) -> dict:
         "epoch_num": 2,
         "batch_size": config["batch_size"],
         "learning_rate": config["lr"],
-        "min_lr_rate": 0.25,
+        "min_lr_rate": 0.1,
         "use_liger": get_use_liger(model_architecture),
         "optimizer": "paged_adamw_8bit",
         "use_lora": config.get("use_lora", False),

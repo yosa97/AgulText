@@ -46,8 +46,11 @@ def get_use_liger(architecture: str) -> str:
         "mixtralforcausallm",
         "mistralforcausallm",
         "qwen3forcausallm",
+        "qwen3moeforcausallm",
         "phi3forcausallm",
         "gemmaforcausallm",
+        "deepseekv2forcausallm",
+        "deepseekv3forcausallm",
     ]:
         return "True"
     else:
