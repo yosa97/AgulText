@@ -124,8 +124,16 @@ class CustomEvalSaveCallback(TrainerCallback):
                 control.should_save = False
                 args.save_strategy = "no"
                 # save the current loss of this step to the state;
-                last_log = state.log_history[-1]
-                my_state["train"]["current_loss"] = last_log["loss"]
+                last_log = None
+                for log in reversed(state.log_history):
+                    if "loss" in log:
+                        last_log = log
+                        break
+                
+                if last_log is not None:
+                    my_state["train"]["current_loss"] = last_log["loss"]
+                else:
+                    my_state["train"]["current_loss"] = float('inf')
                 my_state["mode"] = "continue"
                 if n > MAX_TRIES:
                     n = MAX_TRIES
@@ -143,7 +151,14 @@ class CustomEvalSaveCallback(TrainerCallback):
         elif state.global_step == self.checking_step and self.checking_mode == "second_time": # at second time, we don't estimate the training time again, just save the current_loss
             log_content = f"Checking the model at step: {state.global_step} where check_mode=second_time"            
             my_state = get_state()
-            current_loss = state.log_history[-1]["loss"]
+            current_loss = None
+            for log in reversed(state.log_history):
+                if "loss" in log:
+                    current_loss = log["loss"]
+                    break
+            
+            if current_loss is None:
+                current_loss = float('inf')
             my_state["train"]["current_loss"] = current_loss
                 
             control.should_training_stop = True
@@ -192,8 +207,10 @@ class CustomEvalSaveCallback(TrainerCallback):
         self, args, state: TrainerState, control: TrainerControl, metrics, **kwargs
     ):
         self.save_only = False
-        # Append eval_loss to file
         eval_loss = self.compute_loss(state, metrics)
+        if eval_loss is None:
+            print(f"WARNING: eval_loss is None at step: {state.global_step}, skipping best checkpoint update.", flush=True)
+            return
         if state.global_step < 2:
             return 
         print(f"GO INTO CUSTOMIZED EVALUATE AT STEP: {state.global_step}", flush=True)
@@ -336,7 +353,11 @@ class DPOCustomEvalSaveCallback(CustomEvalSaveCallback):
             )
             return metrics.get("eval_loss", None)
 
-        validator_loss = -math.log(1.0 / (1.0 + math.exp(-margin)))
+        # Stable calculation of -log(sigmoid(margin)) = log(1 + exp(-margin)) to avoid overflow
+        if margin > 0:
+            validator_loss = math.log(1.0 + math.exp(-margin))
+        else:
+            validator_loss = -margin + math.log(1.0 + math.exp(margin))
         print(
             f"DPO validator-aligned loss: margin={margin:.4f} "
             f"-> -log sigmoid(margin) = {validator_loss:.4f}",
@@ -381,10 +402,10 @@ class WhenToEvalHandler:
 
     def __call__(self, global_step: int) -> dict:
         
-        if self.steps_per_epoch != -1 and global_step % self.steps_per_epoch == 0 and global_step > 1:
+        if self.steps_per_epoch > 0 and global_step % self.steps_per_epoch == 0 and global_step > 1:
             return {"eval": True, "reason": "epoch"}
         
-        if self.periodic_save_steps != -1 and global_step % self.periodic_save_steps == 0 and global_step > 1:
+        if self.periodic_save_steps > 0 and global_step % self.periodic_save_steps == 0 and global_step > 1:
             return {"eval": True, "reason": "periodic"}
         
         if self.save_before_remaining_time > 0 and not self.run_eval:

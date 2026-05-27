@@ -110,7 +110,8 @@ def print_trainable_parameters(model):
 
 
 def get_max_length_config():
-    config_path = "test_axolotl.yml"
+    dir_path = os.path.dirname(os.path.abspath(__file__))
+    config_path = os.path.join(dir_path, "test_axolotl.yml")
     with open(config_path, "r") as file:
         config_dict = yaml.safe_load(file)
     return config_dict["sequence_len"]
@@ -356,6 +357,8 @@ def main():
             * training_args.world_size
         )
     )
+    if total_steps_per_epoch == 0:
+        total_steps_per_epoch = 1
 
     log_info(f"total_steps_per_epoch: {total_steps_per_epoch}")
     # consider reducing the batch_size if it is quite big

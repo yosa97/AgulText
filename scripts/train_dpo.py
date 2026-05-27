@@ -26,7 +26,7 @@ from peft import (
 from transformers import TrainerCallback
 import argparse
 import os
-from customized_trainer import resize_if_needed, set_generation_config, CustomEvalSaveCallback, WhenToEvalHandler, init_wandb
+from customized_trainer import resize_if_needed, set_generation_config, DPOCustomEvalSaveCallback, WhenToEvalHandler, init_wandb
 from state_manager import get_state, set_state
 
 # from packing.packed_dataset import PackedDataset
@@ -105,7 +105,8 @@ def print_trainable_parameters(model):
 
 
 def get_max_length_config():
-    config_path = "test_axolotl.yml"
+    dir_path = os.path.dirname(os.path.abspath(__file__))
+    config_path = os.path.join(dir_path, "test_axolotl.yml")
     with open(config_path, "r") as file:
         config_dict = yaml.safe_load(file)
     return config_dict["sequence_len"]
@@ -164,6 +165,8 @@ def main():
         * training_args.gradient_accumulation_steps
         * training_args.world_size
     )
+    if total_steps_per_epoch == 0:
+        total_steps_per_epoch = 1
 
     log_info(f"total_steps_per_epoch: {total_steps_per_epoch}")
     # consider reducing the batch_size if it is quite big
@@ -301,7 +304,7 @@ def main():
         processing_class=tokenizer,
         peft_config=peft_config,
         callbacks=[
-            CustomEvalSaveCallback(
+            DPOCustomEvalSaveCallback(
                 WhenToEvalHandler(train_request["end_time"], train_request["save_before_remaining_time"], periodic_save_steps=periodic_save_steps, steps_per_epoch=total_steps_per_epoch, max_steps=max_steps),
                 train_request["submission_dir"],
                 training_args.output_dir,

@@ -184,7 +184,8 @@ def load_model(training_args: TrainingArguments, model_path: str, token_nums: in
 
 
 def get_max_length_config():
-    config_path = "test_axolotl.yml"
+    dir_path = os.path.dirname(os.path.abspath(__file__))
+    config_path = os.path.join(dir_path, "test_axolotl.yml")
     with open(config_path, "r") as file:
         config_dict = yaml.safe_load(file)
     return config_dict["sequence_len"]
@@ -284,6 +285,8 @@ def main():
         * training_args.gradient_accumulation_steps
         * training_args.world_size
     )
+    if total_steps_per_epoch == 0:
+        total_steps_per_epoch = 1
     log_info(f"total_steps_per_epoch: {total_steps_per_epoch}")
     # consider reducing the batch_size if it is quite big
     # num_steps = len(train_ds) * training_args.num_train_epochs / (training_args.per_device_train_batch_size * training_args.gradient_accumulation_steps * training_args.world_size)

@@ -232,9 +232,12 @@ def patch_wandb_symlinks(base_dir: str):
 
 
 def delete_poor_checkpoints(train_runs: list[dict]):
-    lowest_loss = min([run["current_loss"] for run in train_runs])
+    valid_losses = [run["current_loss"] for run in train_runs if run.get("current_loss") is not None]
+    if not valid_losses:
+        return
+    lowest_loss = min(valid_losses)
     for run in train_runs:
-        if run["current_loss"] > lowest_loss:
+        if run.get("current_loss") is not None and run["current_loss"] > lowest_loss:
             if os.path.exists(run["output_dir"]):
                 print(f"Deleting checkpoint {run['output_dir']} with loss {run['current_loss']}", flush=True)
                 shutil.rmtree(run["output_dir"])
@@ -451,8 +454,9 @@ def main():
                 else: # the final run
                     # first find from runs the best loss
                     c_train_info["train_request"]["checking_mode"] = "none"
-                    index = np.argmin([run["current_loss"] for run in state["runs"]])
-                    print(f"BL;{index};{state['runs'][index]['current_loss']}; {state['lrs'][index]}", flush=True)
+                    losses = [run.get("current_loss") if run.get("current_loss") is not None else float('inf') for run in state["runs"]]
+                    index = np.argmin(losses)
+                    print(f"BL;{index};{state['runs'][index].get('current_loss')}; {state['lrs'][index]}", flush=True)
                     train_cmd = state["runs"][index]["train_cmd"]  #replace_args_in_cmd(train_cmd, "learning_rate", str(state["lrs"][index]))
                     final_output_dir = state["runs"][index]["output_dir"]
                     state["mode"] = "finish"
