@@ -103,10 +103,6 @@ docker run --rm \
         cd /workspace/scripts
         python download_model_only.py "$MODEL"
 
-        # Set offline mode agar transformers baca local path langsung
-        export TRANSFORMERS_OFFLINE=1
-        export HF_DATASETS_OFFLINE=1
-
         python -m text_trainer \
             --task-id "$TASK_ID" \
             --model "$MODEL" \
