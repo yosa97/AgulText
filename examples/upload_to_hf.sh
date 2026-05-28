@@ -11,6 +11,10 @@
 
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$REPO_ROOT"
+
 CHECKPOINT_DIR="${1}"
 HF_REPO_ID="${2}"
 HF_TOKEN="${HF_TOKEN:-}"       # set via env atau akan ditanya

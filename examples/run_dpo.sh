@@ -14,6 +14,10 @@
 
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$REPO_ROOT"
+
 TASK_ID="test_dpo_$(date +%s)"
 MODEL="${MODEL:-Qwen/Qwen2.5-0.5B-Instruct}"
 HF_TOKEN="${HF_TOKEN:-}"
