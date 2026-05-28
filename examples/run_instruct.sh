@@ -88,6 +88,7 @@ docker run --rm \
     --shm-size=16g \
     -v "$CACHE_DIR:/cache" \
     -v "$CACHE_DIR/checkpoints:/app/checkpoints" \
+    -v "$REPO_ROOT/scripts:/workspace/scripts" \
     -v "$CACHE_DIR/internal_datasets:/workspace/scripts/datasets" \
     -e WANDB_MODE=offline \
     -e HF_HUB_ENABLE_HF_TRANSFER=1 \
