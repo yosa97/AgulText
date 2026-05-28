@@ -78,6 +78,7 @@ fi
 MODEL_DIR_NAME="$(echo $MODEL | tr '/' '--')"
 
 # Buat direktori internal agar log tokenisasi bisa dibaca dari host
+rm -rf "$CACHE_DIR/internal_datasets"
 mkdir -p "$CACHE_DIR/internal_datasets"
 
 echo ">>> Menjalankan container training..."

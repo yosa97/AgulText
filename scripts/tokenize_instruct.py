@@ -255,10 +255,16 @@ def main(training_request_path: str):
             f"Max data size is {max_data_size}, so we will only extract {max_data_size} samples randomly"
         )
 
+    with open(total_path, "r") as f:
+        _temp_data = json.load(f)
+    actual_dev_size = min(200, max(1, len(_temp_data) // 5))
+    del _temp_data
+
     split_dataset(
         total_path,
         train_path,
         dev_path,
+        dev_size=actual_dev_size,
         max_data_size=max_data_size,
     )
     

@@ -68,6 +68,7 @@ fi
 
 MODEL_DIR_NAME="$(echo $MODEL | tr '/' '--')"
 
+rm -rf "$CACHE_DIR/internal_datasets"
 mkdir -p "$CACHE_DIR/internal_datasets"
 
 echo ">>> Menjalankan container training DPO..."

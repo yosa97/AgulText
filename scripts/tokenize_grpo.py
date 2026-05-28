@@ -80,7 +80,11 @@ def main(training_request_path: str):
     task_id = training_request["train_request"]["task_id"]
     train_path = os.path.join("datasets", f"grpo_train_{task_id}.json")
     dev_path = os.path.join("datasets", f"grpo_dev_{task_id}.json")
-    split_dataset(total_path, train_path, dev_path)
+    with open(total_path, "r") as f:
+        _temp_data = json.load(f)
+    actual_dev_size = min(200, max(1, len(_temp_data) // 5))
+    del _temp_data
+    split_dataset(total_path, train_path, dev_path, dev_size=actual_dev_size)
     t2 = datetime.now()
     print(f"Tokenization completed in {(t2 - t1).seconds} seconds")
 
