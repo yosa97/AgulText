@@ -77,6 +77,9 @@ fi
 
 MODEL_DIR_NAME="$(echo $MODEL | tr '/' '--')"
 
+# Buat direktori internal agar log tokenisasi bisa dibaca dari host
+mkdir -p "$CACHE_DIR/internal_datasets"
+
 echo ">>> Menjalankan container training..."
 docker run --rm \
     --gpus all \
@@ -84,6 +87,7 @@ docker run --rm \
     --shm-size=16g \
     -v "$CACHE_DIR:/cache" \
     -v "$CACHE_DIR/checkpoints:/app/checkpoints" \
+    -v "$CACHE_DIR/internal_datasets:/workspace/scripts/datasets" \
     -e WANDB_MODE=offline \
     -e HF_HUB_ENABLE_HF_TRANSFER=1 \
     -e TASK_ID="$TASK_ID" \
