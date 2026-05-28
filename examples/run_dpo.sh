@@ -83,15 +83,19 @@ docker run --rm \
     -e DATASET_TYPE="$DATASET_TYPE" \
     -e HOURS="$HOURS" \
     -e REPO_NAME="$REPO_NAME" \
+    -e HF_TOKEN="$HF_TOKEN" \
+    -e HF_REPO="$HF_REPO" \
     --entrypoint bash \
     "$IMAGE_NAME" \
     -c '
         redis-server --daemonize yes && sleep 2
-        MODEL_DIR="/cache/models/$MODEL_DIR_NAME"
-        if [ ! -d "$MODEL_DIR" ]; then
-            python -c "from huggingface_hub import snapshot_download; snapshot_download(\"$MODEL\", local_dir=\"$MODEL_DIR\", ignore_patterns=[\"*.gguf\"]); print(\"Model downloaded.\")"
-        fi
+
         cd /workspace/scripts
+        python download_model_only.py "$MODEL"
+
+        export TRANSFORMERS_OFFLINE=1
+        export HF_DATASETS_OFFLINE=1
+
         python -m text_trainer \
             --task-id "$TASK_ID" \
             --model "$MODEL" \
@@ -101,19 +105,28 @@ docker run --rm \
             --file-format json \
             --hours-to-complete "$HOURS" \
             --expected-repo-name "$REPO_NAME"
+
+        if [ -n "$HF_REPO" ] && [ -n "$HF_TOKEN" ]; then
+            echo ">>> Mengupload ke HuggingFace: $HF_REPO ..."
+            python -c "
+from huggingface_hub import HfApi, create_repo
+api = HfApi(token=\"$HF_TOKEN\")
+create_repo(\"$HF_REPO\", token=\"$HF_TOKEN\", private=False, exist_ok=True)
+api.upload_folder(
+    folder_path=\"/app/checkpoints/$TASK_ID/$REPO_NAME\",
+    repo_id=\"$HF_REPO\",
+    token=\"$HF_TOKEN\",
+    ignore_patterns=[\"*.log\", \"optimizer.pt\", \"rng_state*.pth\"],
+)
+print(\"Upload selesai: https://huggingface.co/$HF_REPO\")
+"
+        fi
     '
 
 echo ""
 echo "✓ Training selesai → $CACHE_DIR/checkpoints/$TASK_ID/$REPO_NAME"
-
 if [ -n "$HF_REPO" ]; then
-    echo ""
-    echo ">>> Mengupload ke HuggingFace: $HF_REPO ..."
-    HF_TOKEN="$HF_TOKEN" bash examples/upload_to_hf.sh \
-        "$CACHE_DIR/checkpoints/$TASK_ID/$REPO_NAME" \
-        "$HF_REPO"
+    echo "✓ Model terupload → https://huggingface.co/$HF_REPO"
 else
-    echo ""
-    echo "TIP: Upload ke HF:"
-    echo "  bash examples/upload_to_hf.sh $CACHE_DIR/checkpoints/$TASK_ID/$REPO_NAME yosa97/nama-repo"
+    echo "TIP: Upload ke HF: HF_TOKEN=hf_xxx HF_REPO=yosa97/nama-repo bash examples/run_dpo.sh"
 fi
