@@ -83,8 +83,9 @@ docker run --rm \
     -e DATASET_TYPE="$DATASET_TYPE" \
     -e HOURS="$HOURS" \
     -e REPO_NAME="$REPO_NAME" \
+    --entrypoint bash \
     "$IMAGE_NAME" \
-    bash -c '
+    -c '
         redis-server --daemonize yes && sleep 2
         MODEL_DIR="/cache/models/$MODEL_DIR_NAME"
         if [ ! -d "$MODEL_DIR" ]; then
