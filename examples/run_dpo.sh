@@ -57,7 +57,15 @@ cat > "$DATASET_PATH" << 'EOF'
 ]
 EOF
 
-echo ">>> Dataset DPO ditulis: $DATASET_PATH (15 contoh)"
+python3 -c "
+import json
+with open('$DATASET_PATH') as f:
+    data = json.load(f)
+expanded = (data * 17)[:250]
+with open('$DATASET_PATH', 'w') as f:
+    json.dump(expanded, f, ensure_ascii=False)
+print(f'Dataset diperluas ke {len(expanded)} samples')
+"
 
 DATASET_TYPE='{"field_prompt":"prompt","field_chosen":"chosen","field_rejected":"rejected","prompt_format":"{prompt}","chosen_format":"{chosen}","rejected_format":"{rejected}"}'
 

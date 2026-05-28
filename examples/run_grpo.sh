@@ -57,7 +57,15 @@ cat > "$DATASET_PATH" << 'EOF'
 ]
 EOF
 
-echo ">>> Dataset GRPO ditulis: $DATASET_PATH (15 contoh)"
+python3 -c "
+import json
+with open('$DATASET_PATH') as f:
+    data = json.load(f)
+expanded = (data * 17)[:250]
+with open('$DATASET_PATH', 'w') as f:
+    json.dump(expanded, f, ensure_ascii=False)
+print(f'Dataset diperluas ke {len(expanded)} samples')
+"
 
 # Reward function: beri nilai 1.0 jika jawaban mengandung angka
 DATASET_TYPE='{"field_prompt":"prompt","reward_functions":[{"reward_func":"def reward_func(completions, **kwargs):\n    import re\n    return [1.0 if re.search(r\"\\\\d+\", c) else 0.0 for c in completions]","reward_weight":1.0,"func_hash":"test_grpo_hash","is_generic":false}]}'
