@@ -67,6 +67,8 @@ if ! docker image inspect "$IMAGE_NAME" &>/dev/null; then
     docker build -f dockerfiles/standalone-text-trainer.dockerfile -t "$IMAGE_NAME" .
 fi
 
+MODEL_DIR_NAME="$(echo $MODEL | tr '/' '--')"
+
 echo ">>> Menjalankan container training GRPO..."
 docker run --rm \
     --gpus all \
@@ -76,24 +78,30 @@ docker run --rm \
     -v "$CACHE_DIR/checkpoints:/app/checkpoints" \
     -e WANDB_MODE=offline \
     -e HF_HUB_ENABLE_HF_TRANSFER=1 \
+    -e TASK_ID="$TASK_ID" \
+    -e MODEL="$MODEL" \
+    -e MODEL_DIR_NAME="$MODEL_DIR_NAME" \
+    -e DATASET_TYPE="$DATASET_TYPE" \
+    -e HOURS="$HOURS" \
+    -e REPO_NAME="$REPO_NAME" \
     "$IMAGE_NAME" \
-    bash -c "
+    bash -c '
         redis-server --daemonize yes && sleep 2
-        MODEL_DIR='/cache/models/$(echo $MODEL | tr '/' '--')'
-        if [ ! -d \"\$MODEL_DIR\" ]; then
-            python -c \"from huggingface_hub import snapshot_download; snapshot_download('$MODEL', local_dir='\$MODEL_DIR', ignore_patterns=['*.gguf']); print('Model downloaded.')\"
+        MODEL_DIR="/cache/models/$MODEL_DIR_NAME"
+        if [ ! -d "$MODEL_DIR" ]; then
+            python -c "from huggingface_hub import snapshot_download; snapshot_download(\"$MODEL\", local_dir=\"$MODEL_DIR\", ignore_patterns=[\"*.gguf\"]); print(\"Model downloaded.\")"
         fi
         cd /workspace/scripts
         python -m text_trainer \
-            --task-id '$TASK_ID' \
-            --model '$MODEL' \
-            --dataset '/cache/datasets/${TASK_ID}_train_data.json' \
-            --dataset-type '$DATASET_TYPE' \
+            --task-id "$TASK_ID" \
+            --model "$MODEL" \
+            --dataset "/cache/datasets/${TASK_ID}_train_data.json" \
+            --dataset-type "$DATASET_TYPE" \
             --task-type GrpoTask \
             --file-format json \
-            --hours-to-complete $HOURS \
-            --expected-repo-name '$REPO_NAME'
-    "
+            --hours-to-complete "$HOURS" \
+            --expected-repo-name "$REPO_NAME"
+    '
 
 echo ""
 echo "✓ Training selesai → $CACHE_DIR/checkpoints/$TASK_ID/$REPO_NAME"
