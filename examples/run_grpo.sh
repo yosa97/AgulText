@@ -25,7 +25,7 @@ HF_REPO="${HF_REPO:-}"
 HOURS="${HOURS:-0.5}"
 REPO_NAME="grpo-test-output"
 IMAGE_NAME="agultext:latest"
-CACHE_DIR="/tmp/agultext_cache"
+CACHE_DIR="/ephemeral/agultext_cache"
 
 echo "╔══════════════════════════════════════════╗"
 echo "  AgulText — GRPO Training Test"
@@ -79,6 +79,8 @@ MODEL_DIR_NAME="$(echo $MODEL | tr '/' '--')"
 
 rm -rf "$CACHE_DIR/internal_datasets"
 mkdir -p "$CACHE_DIR/internal_datasets"
+mkdir -p "$CACHE_DIR/soutputs"
+mkdir -p "$CACHE_DIR/wandb"
 
 echo ">>> Menjalankan container training GRPO..."
 docker run --rm \
@@ -89,6 +91,8 @@ docker run --rm \
     -v "$CACHE_DIR/checkpoints:/app/checkpoints" \
     -v "$REPO_ROOT/scripts:/workspace/scripts" \
     -v "$CACHE_DIR/internal_datasets:/workspace/scripts/datasets" \
+    -v "$CACHE_DIR/soutputs:/workspace/scripts/soutputs" \
+    -v "$CACHE_DIR/wandb:/workspace/scripts/wandb" \
     -e WANDB_MODE=offline \
     -e HF_HUB_ENABLE_HF_TRANSFER=1 \
     -e TASK_ID="$TASK_ID" \
