@@ -96,6 +96,9 @@ docker run --rm \
         cd /workspace/scripts
         python download_model_only.py "$MODEL"
 
+        mkdir -p /workspace/input_data
+        cp "/cache/datasets/${TASK_ID}_train_data.json" /workspace/input_data/
+
         python -m text_trainer \
             --task-id "$TASK_ID" \
             --model "$MODEL" \
