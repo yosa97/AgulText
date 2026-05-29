@@ -7,6 +7,9 @@ scripts/test.py
 scripts/mlruns
 scripts/outputs
 scripts/wandb
+scripts/soutputs
+scripts/AgulText
+scripts/Ngagul
 scripts/yml_config
 scripts/runs
 *.py[cod]
