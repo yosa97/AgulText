@@ -26,7 +26,7 @@ from peft import (
 from transformers import TrainerCallback
 import argparse
 import os
-from customized_trainer import resize_if_needed, set_generation_config, DPOCustomEvalSaveCallback, WhenToEvalHandler, init_wandb
+from customized_trainer import resize_if_needed, set_generation_config, CustomEvalSaveCallback, WhenToEvalHandler, init_wandb
 from state_manager import get_state, set_state
 
 # from packing.packed_dataset import PackedDataset
@@ -304,7 +304,7 @@ def main():
         processing_class=tokenizer,
         peft_config=peft_config,
         callbacks=[
-            DPOCustomEvalSaveCallback(
+            CustomEvalSaveCallback(
                 WhenToEvalHandler(train_request["end_time"], train_request["save_before_remaining_time"], periodic_save_steps=periodic_save_steps, steps_per_epoch=total_steps_per_epoch, max_steps=max_steps),
                 train_request["submission_dir"],
                 training_args.output_dir,

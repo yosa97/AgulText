@@ -9,7 +9,7 @@ from model_utility import (
 )
 from copy import deepcopy
 from lrs_lookup import get_grpo_lr, get_grpo_python_lr
-allow_find_lk_lr = True
+allow_find_lk_lr = False
 
 GRPO_CONFIG = {
     "0_1_b": {
@@ -208,7 +208,7 @@ def get_run_cmd(config: dict, gpu_nums: int):
     --eval_accumulation_steps 1 \
     --eval_strategy no \
     --save_strategy no \
-    --logging_steps 1 \
+    --logging_steps 5 \
     --learning_rate {learning_rate} \
     --weight_decay 0. \
     --warmup_steps 35 \

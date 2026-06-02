@@ -1,6 +1,5 @@
 from transformers import GenerationConfig
 import datetime
-import math
 from datetime import timezone
 from transformers import (
     TrainerCallback,
@@ -15,10 +14,9 @@ from transformers.trainer_utils import is_main_process
 import wandb
 import torch
 from state_manager import get_state, set_state
-MAX_TRIES = 12
+MAX_TRIES = 9
 
 
-VALIDATOR_BETA = 0.5
 MIS_MATCH_VOCAB_SIZE_MODELS = [
     'NousResearch/Nous-Capybara-7B-V1',
     'berkeley-nest/Starling-LM-7B-alpha',
@@ -101,8 +99,8 @@ class CustomEvalSaveCallback(TrainerCallback):
             # n * time_so_far + (time_so_far + total_remaining_training_time) = total_remaining_time
             # time_so_far + total_remaining_training_time is the time it takes to finish the training (need to estimate the eval time and save time, assuming this is 15 minutes)
             # assuming time_so_far is + 5 minutes, just in case the checking step takes more time than expected
-            max_var_time_sofar = 2 * 60
-            n = (total_remaining_time - (time_so_far + total_remaining_training_time + 10 * 60)) / (time_so_far + max_var_time_sofar) # reduce buffer to fit more LR experiments
+            max_var_time_sofar = 3 * 60
+            n = (total_remaining_time - (time_so_far + total_remaining_training_time + 12 * 60)) / (time_so_far + max_var_time_sofar) # 300 = 5 minutes, assume that it extra time would be more or less 5 minutes
             n = int(n)
             my_state["check_details"] = {
                 "now": str(now.strftime("%Y-%m-%d %H:%M:%S")),
@@ -124,16 +122,8 @@ class CustomEvalSaveCallback(TrainerCallback):
                 control.should_save = False
                 args.save_strategy = "no"
                 # save the current loss of this step to the state;
-                last_log = None
-                for log in reversed(state.log_history):
-                    if "loss" in log:
-                        last_log = log
-                        break
-                
-                if last_log is not None:
-                    my_state["train"]["current_loss"] = last_log["loss"]
-                else:
-                    my_state["train"]["current_loss"] = float('inf')
+                last_log = state.log_history[-1]
+                my_state["train"]["current_loss"] = last_log["loss"]
                 my_state["mode"] = "continue"
                 if n > MAX_TRIES:
                     n = MAX_TRIES
@@ -280,104 +270,24 @@ class CustomEvalSaveCallback(TrainerCallback):
 
 class GRPOCustomEvalSaveCallback(CustomEvalSaveCallback):
     def compute_loss(self, state: TrainerState, metrics):
-        eval_reward, eval_kl = self._extract_metrics(state, metrics)
-        if eval_reward is None:
-            print("GRPO compute_loss: eval_reward not found in metrics or log_history", flush=True)
-            return None
-
-        if eval_kl is not None:
-            score = eval_reward - VALIDATOR_BETA * eval_kl
-            print(
-                f"GRPO validator-aligned score: reward({eval_reward:.4f}) "
-                f"- {VALIDATOR_BETA}*kl({eval_kl:.4f}) = {score:.4f}",
-                flush=True,
-            )
-        else:
-            score = eval_reward
-            print(
-                f"GRPO score (no eval_kl available): reward({eval_reward:.4f}) "
-                f"— validator KL penalty NOT modeled, may select drifted checkpoints",
-                flush=True,
-            )
-
-        return -score
-
-    @staticmethod
-    def _extract_metrics(state: TrainerState, metrics):
-        sources = []
-        if metrics:
-            sources.append(metrics)
+        eval_loss = None
         if state.log_history:
-            sources.append(state.log_history[-1])
+            last_log_entry = state.log_history[-1]
+            eval_loss = last_log_entry.get("eval_reward", None)
+            print(f"choose eval_loss ({eval_loss}) as eval_reward from: last_log_entry: {last_log_entry}; \n metrics: {metrics}", flush=True)
+        else:
+            print(f"state.log_history is empty", flush=True)
 
-        eval_reward, eval_kl = None, None
-        kl_keys = ("eval_kl", "eval_completions/mean_kl", "eval/kl", "eval_mean_kl")
-        for src in sources:
-            if eval_reward is None:
-                eval_reward = src.get("eval_reward")
-            if eval_kl is None:
-                for k in kl_keys:
-                    if k in src:
-                        eval_kl = src[k]
-                        break
-        return eval_reward, eval_kl
+        if eval_loss is not None:
+            eval_loss = - eval_loss
+
+        return eval_loss
 
     def penalize_eval_loss(self, eval_loss: float):
         if eval_loss < 0:
             return eval_loss / 3
         else:
             return eval_loss * 3
-
-
-class DPOCustomEvalSaveCallback(CustomEvalSaveCallback):
-    """Validator-aligned checkpoint selection for DPO.
-
-    Training-side `eval_loss` includes the rpo_alpha NLL component when
-    rpo_alpha > 0, but the G.O.D validator computes pure DPO sigmoid loss
-    only. Selecting checkpoints by raw `eval_loss` can pick a model that
-    memorized chosen completions (low NLL) but has weak preference margin.
-
-    Computes the validator-style loss directly from `eval_rewards/margins`
-    which TRL logs automatically. That quantity is exactly
-    beta*(reward_chosen - reward_rejected), so -log sigmoid(margin) equals
-    the validator's eval_loss.
-    """
-
-    def compute_loss(self, state: TrainerState, metrics):
-        margin = self._extract_margin(state, metrics)
-        if margin is None:
-            print(
-                "DPO compute_loss: eval_rewards/margins not found, "
-                "falling back to raw eval_loss (may include NLL component)",
-                flush=True,
-            )
-            return metrics.get("eval_loss", None)
-
-        # Stable calculation of -log(sigmoid(margin)) = log(1 + exp(-margin)) to avoid overflow
-        if margin > 0:
-            validator_loss = math.log(1.0 + math.exp(-margin))
-        else:
-            validator_loss = -margin + math.log(1.0 + math.exp(margin))
-        print(
-            f"DPO validator-aligned loss: margin={margin:.4f} "
-            f"-> -log sigmoid(margin) = {validator_loss:.4f}",
-            flush=True,
-        )
-        return validator_loss
-
-    @staticmethod
-    def _extract_margin(state: TrainerState, metrics):
-        sources = []
-        if metrics:
-            sources.append(metrics)
-        if state.log_history:
-            sources.append(state.log_history[-1])
-        margin_keys = ("eval_rewards/margins", "eval/rewards/margins", "eval_margins")
-        for src in sources:
-            for k in margin_keys:
-                if k in src:
-                    return src[k]
-        return None
 
 
 def check_remaining_time_less_than_minutes(end_time: str, minutes: int) -> bool:

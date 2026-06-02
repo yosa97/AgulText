@@ -1,6 +1,6 @@
 from model_utility import get_model_architecture, get_model_num_params, get_use_liger, disable_flash_attention, get_gradient_checkpointing, get_gpu_count
 from copy import deepcopy
-from lrs_lookup import get_dpo_lr, get_lr_from_ar_dpo
+from lrs_lookup import get_dpo_lr
 
 DPO_CONFIG = {
     "0_1_b": {
@@ -155,7 +155,7 @@ def get_run_cmd(config: dict, gpu_nums: int):
     --eval_accumulation_steps 1 \
     --eval_strategy no \
     --save_strategy no \
-    --logging_steps 1 \
+    --logging_steps 5 \
     --learning_rate {learning_rate} \
     --weight_decay 0. \
     --warmup_steps 35 \
@@ -222,12 +222,6 @@ def get_training_json(train_info: dict) -> dict:
         if lr is not None:
             print(f"Using lr from lk: {lr}", flush=True)
             run_config["learning_rate"] = lr
-        else:
-            # print(f"Using lr from config: {run_config['learning_rate']}", flush=True)
-            lr = get_lr_from_ar_dpo(model_architecture, param_nums)
-            if lr is not None:
-                print(f"Using lr from ar: {lr} for architecture: {model_architecture} and size: {param_nums}", flush=True)
-                run_config["learning_rate"] = lr
     
     run_config["learning_rate"] *= train_info["reg_ratio"]
     run_cmd = get_run_cmd(run_config, run_config["gpu_nums"])
