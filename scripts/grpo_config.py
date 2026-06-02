@@ -259,7 +259,7 @@ def get_training_json(train_info: dict) -> dict:
         "epoch_num": 2,
         "batch_size": config["batch_size"],
         "learning_rate": config["lr"],
-        "min_lr_rate": 0.1,
+        "min_lr_rate": 0.25,
         "use_liger": get_use_liger(model_architecture),
         "optimizer": "paged_adamw_8bit",
         "use_lora": config.get("use_lora", False),
