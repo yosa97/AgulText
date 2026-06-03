@@ -5,10 +5,9 @@ from model_utility import (
     disable_flash_attention,
     get_data_size,
     get_gpu_count,
-    get_model_max_length
 )
 from copy import deepcopy
-from lrs_lookup import get_instruct_lr, get_lr_from_ar_instruct
+from lrs_lookup import get_instruct_lr
 
 
 FIXED_BS_CONFIG = {
@@ -159,7 +158,7 @@ def get_run_cmd(config: dict, gpu_nums: int):
     --eval_accumulation_steps 1 \
     --eval_strategy no \
     --save_strategy epoch \
-    --logging_steps 1 \
+    --logging_steps 5 \
     --learning_rate {learning_rate} \
     --weight_decay 0. \
     --warmup_steps 35 \
@@ -187,12 +186,6 @@ def get_run_cmd(config: dict, gpu_nums: int):
         )
 
     return template
-
-
-def get_checking_step(param_nums: int, hours_to_complete) -> int:
-    if param_nums <= 3_000_000_000 and hours_to_complete >= 2: # small model should check more often
-        return 140
-    return 70
 
 
 def get_training_json(train_info: dict) -> dict:
@@ -278,11 +271,7 @@ def get_training_json(train_info: dict) -> dict:
             print(f"Using lr from lk: {lr}", flush=True)
             run_config["learning_rate"] = lr
         else:
-            # print(f"Using lr from config: {run_config['learning_rate']}", flush=True)
-            lr = get_lr_from_ar_instruct(model_architecture, param_nums)
-            if lr is not None:
-                print(f"Using lr from ar: {lr} for architecture: {model_architecture} and size: {param_nums}", flush=True)
-                run_config["learning_rate"] = lr
+            print(f"Using lr from config: {run_config['learning_rate']}", flush=True)
 
     run_config["learning_rate"] *= train_info["reg_ratio"]
     run_cmd = get_run_cmd(run_config, run_config["gpu_nums"])
@@ -290,8 +279,7 @@ def get_training_json(train_info: dict) -> dict:
     train_request["save_before_remaining_time"] = 3
     train_request["adjust_batch_size"] = False
     train_request["periodic_save_steps"] = 500
-    train_request["checking_step"] = get_checking_step(param_nums, train_info["hours_to_complete"])
-    train_request["max_length"] = get_model_max_length(model_path)
+    train_request["checking_step"] = 70
 
     if param_nums < 1_000_000_000:
         train_request["min_steps"] = max(

@@ -214,7 +214,8 @@ class CustomEvalSaveCallback(TrainerCallback):
         else:
             if self.best_checkpoint_info is not None:
                 print(f" At step: {state.global_step} The eval_loss: {eval_loss} is not smaller than the current best eval_loss: {self.best_checkpoint_info['loss']}, update_best_checkpoint={self.update_best_checkpoint}", flush=True)
-            
+            self.update_best_checkpoint = False  # Reset flag — jangan biarkan stale True dari eval sebelumnya
+
 
     def on_save(self, args, state: TrainerState, control: TrainerControl, **kwargs):
         

@@ -434,7 +434,14 @@ def main():
     log_info(f"periodic_save_steps: {periodic_save_steps}")
 
     training_args.save_only_model = True  # only save the model, not the optimizer
- 
+
+    # Dynamic warmup: 5% of total steps, clamped between 10 and 100
+    total_steps_all_epochs = total_steps_per_epoch * training_args.num_train_epochs
+    dynamic_warmup = max(10, min(100, int(total_steps_all_epochs * 0.05)))
+    if dynamic_warmup != training_args.warmup_steps:
+        log_info(f"Overriding warmup_steps: {training_args.warmup_steps} -> {dynamic_warmup}")
+        training_args.warmup_steps = dynamic_warmup
+
     if training_args.gradient_checkpointing:
         training_args.gradient_checkpointing_kwargs = {"use_reentrant": False}
         

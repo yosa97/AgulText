@@ -8,33 +8,38 @@ DPO_CONFIG = {
         "distributed": "ddp",
         "gpu_count": 1,
         "batch_size": 16,
+        "beta": 0.1,
     },
     "1_2_b": {
         "lr": 8.7e-6,
         "distributed": "ddp",
         "gpu_count": 1,
         "batch_size": 12,
+        "beta": 0.1,
     },
     "2_4_b": {
         "lr": 6.5e-6,
         "distributed": "ddp",
         "gpu_count": 2,
         "batch_size": 12,
-        "use_lora": True
+        "use_lora": True,
+        "beta": 0.1,
     },
     "4_5_b": {
         "lr": 6.25e-6,
         "distributed": "ddp",
         "gpu_count": 4,
         "batch_size": 12,
-        "use_lora": True
+        "use_lora": True,
+        "beta": 0.1,
     },
     "5_9_b": {
         "lr": 7.5e-6,
         "distributed": "ddp",
         "gpu_count": 4,
         "batch_size": 8,
-        "use_lora": True
+        "use_lora": True,
+        "beta": 0.1,
     },
     "9_12_b": {
         "lr": 5e-6,
@@ -42,7 +47,8 @@ DPO_CONFIG = {
         "gpu_count": 4,
         "use_lora": True,
         "batch_size": 32,
-        "gradient_checkpointing": False
+        "gradient_checkpointing": False,
+        "beta": 0.05,
     },
     "12_14_b": {
         "lr": 8.5e-6,
@@ -50,7 +56,8 @@ DPO_CONFIG = {
         "gpu_count": 4,
         "use_lora": True,
         "batch_size": 24,
-        "gradient_checkpointing": False
+        "gradient_checkpointing": False,
+        "beta": 0.05,
     },
     "14_15_b": {
         "lr": 8.5e-6,
@@ -58,7 +65,8 @@ DPO_CONFIG = {
         "gpu_count": 8,
         "use_lora": True,
         "batch_size": 18,
-        "gradient_checkpointing": False
+        "gradient_checkpointing": False,
+        "beta": 0.05,
     },
     "15_40_b": {
         "lr": 8e-6,
@@ -66,7 +74,8 @@ DPO_CONFIG = {
         "gpu_count": 8,
         "use_lora": True,
         "batch_size": 16,
-        "gradient_checkpointing": False
+        "gradient_checkpointing": False,
+        "beta": 0.05,
     },
     "40_80_b": {
         "lr": 8e-6,
@@ -74,8 +83,9 @@ DPO_CONFIG = {
         "gpu_count": 8,
         "use_lora": True,
         "batch_size": 8,
-        "gradient_checkpointing": False
-    }        
+        "gradient_checkpointing": False,
+        "beta": 0.05,
+    }
 }
 
 for key in DPO_CONFIG:
@@ -129,6 +139,7 @@ def get_run_cmd(config: dict, gpu_nums: int):
         "use_liger",
         "optimizer",
         "disable_fa",
+        "beta",
     ]
     for key in required_keys:
         if key not in config:
@@ -164,7 +175,7 @@ def get_run_cmd(config: dict, gpu_nums: int):
     --tf32 True \
     --gradient_checkpointing {gradient_checkpointing} \
     --optim {optimizer} \
-    --use_liger {use_liger} --disable_fa {disable_fa}"""
+    --use_liger {use_liger} --disable_fa {disable_fa} --beta {beta}"""
     )
 
     if config.get("use_lora", False):
@@ -206,7 +217,8 @@ def get_training_json(train_info: dict) -> dict:
         "distributed": config.get("distributed", "ddp"),
         "gradient_checkpointing": get_gradient_checkpointing(model_name),
         "gradient_accumulation_steps": 1,
-        "use_attn_implementation": "kernels-community/vllm-flash-attn3" if train_info.get("is_openai", False) else ""
+        "use_attn_implementation": "kernels-community/vllm-flash-attn3" if train_info.get("is_openai", False) else "",
+        "beta": config.get("beta", 0.1),
     }
     
     if not config.get("gradient_checkpointing", True):
