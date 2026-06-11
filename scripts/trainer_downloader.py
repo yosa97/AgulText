@@ -3,6 +3,7 @@ import asyncio
 import os
 import shutil
 import tempfile
+import time
 
 from huggingface_hub import HfApi
 from huggingface_hub import hf_hub_download
@@ -14,9 +15,66 @@ from core.models.utility_models import TaskType
 from core.utils import download_s3_file
 import train_cst as cst
 import training_paths as train_paths
-import json 
+import json
 
 hf_api = HfApi()
+
+
+def verify_download_integrity(path: str, min_size_bytes: int = 1024) -> bool:
+    """Return True if *path* exists and is at least *min_size_bytes* large.
+
+    A lightweight sanity-check after downloads to catch truncated files
+    before training begins.
+    """
+    if not os.path.exists(path):
+        print(f"[trainer_downloader] integrity FAIL: {path} does not exist", flush=True)
+        return False
+    size = os.path.getsize(path) if os.path.isfile(path) else sum(
+        os.path.getsize(os.path.join(dp, f))
+        for dp, _, fns in os.walk(path)
+        for f in fns
+    )
+    if size < min_size_bytes:
+        print(
+            f"[trainer_downloader] integrity FAIL: {path} is only {size} bytes (< {min_size_bytes})",
+            flush=True,
+        )
+        return False
+    print(f"[trainer_downloader] integrity OK: {path} ({size / 1024 ** 2:.1f} MB)", flush=True)
+    return True
+
+
+def truncate_dataset_by_size_mb(data_path: str, max_mb: float) -> int:
+    """Load a JSON array from *data_path* and truncate it so the file stays ≤ *max_mb* MB.
+
+    Writes the truncated list back in-place.  Returns the number of samples kept.
+    Useful when validators send unusually large datasets.
+    """
+    max_bytes = int(max_mb * 1024 * 1024)
+    with open(data_path, "r") as f:
+        data = json.load(f)
+
+    if not isinstance(data, list):
+        return len(data)  # nothing to truncate
+
+    # Binary search: find the largest prefix that serialises within budget
+    lo, hi = 0, len(data)
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if len(json.dumps(data[:mid]).encode()) <= max_bytes:
+            lo = mid
+        else:
+            hi = mid - 1
+
+    if lo < len(data):
+        print(
+            f"[trainer_downloader] truncate_dataset_by_size_mb: {len(data)} → {lo} samples",
+            flush=True,
+        )
+        with open(data_path, "w") as f:
+            json.dump(data[:lo], f)
+
+    return lo
 
 
 async def download_text_dataset(task_id, dataset_url, file_format, dataset_dir, data_size):

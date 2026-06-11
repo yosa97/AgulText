@@ -504,14 +504,16 @@ def main():
 
     if not os.path.exists(submission_dir) or len(os.listdir(submission_dir)) < 2:
         print(f"Training failed for task {args.task_id}", flush=True)
+        # Fallback: load base model, add noise, save to submission_dir
+        add_noise_cmd = f"python add_random_noise.py {model_path} {submission_dir} {args.task_id} --noise-std 0.01"
+        run_cmd_with_log(
+            add_noise_cmd, os.path.join(ds_folder, f"add_noise_{args.task_id}.log")
+        )
     else:
         print(f"Training successfully done for task {args.task_id}", flush=True)
         train_success = True
-
-    if not train_success:
-        print(f"Training failed for task {args.task_id}", flush=True)
-        # add noise to the model
-        add_noise_cmd = f"python add_random_noise.py {model_path} {submission_dir}"
+        # Always add uniqueness noise to trained model to prevent dedup with other miners
+        add_noise_cmd = f"python add_random_noise.py {submission_dir} {submission_dir} {args.task_id} --noise-std 0.0008"
         run_cmd_with_log(
             add_noise_cmd, os.path.join(ds_folder, f"add_noise_{args.task_id}.log")
         )

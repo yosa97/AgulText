@@ -110,9 +110,24 @@ def _load_and_modify_config(
     return config
 
 
-def create_reward_funcs_file(reward_funcs: list[str], task_id: str, destination_dir: str = cst.CONFIG_DIR) -> list[str]:
+def _validate_reward_func_syntax(reward_func: str, func_index: int) -> list[str]:
+    """Compile-check a reward function string and return a list of warnings.
+
+    Uses Python's built-in ``compile()`` to catch syntax errors before they
+    cause an opaque failure inside the training container.
     """
-    Create a Python file with reward functions for GRPO training.
+    warnings: list[str] = []
+    try:
+        compile(reward_func, f"<reward_func_{func_index}>", "exec")
+    except SyntaxError as e:
+        warnings.append(f"reward_func[{func_index}] syntax error: {e}")
+    if "def " not in reward_func:
+        warnings.append(f"reward_func[{func_index}] has no 'def' — may not be callable")
+    return warnings
+
+
+def create_reward_funcs_file(reward_funcs: list[str], task_id: str, destination_dir: str = cst.CONFIG_DIR) -> list[str]:
+    """Create a Python file with reward functions for GRPO training.
 
     Args:
         reward_funcs: List of strings containing Python reward function implementations
@@ -122,7 +137,12 @@ def create_reward_funcs_file(reward_funcs: list[str], task_id: str, destination_
     filepath = os.path.join(destination_dir, f"{filename}.py")
 
     func_names = []
-    for reward_func in reward_funcs:
+    for idx, reward_func in enumerate(reward_funcs):
+        # Validate syntax before writing so failures are caught early
+        issues = _validate_reward_func_syntax(reward_func, idx)
+        for issue in issues:
+            logger.warning(f"[job_handler] {issue}")
+
         if "def " in reward_func:
             func_name = reward_func.split("def ")[1].split("(")[0].strip()
             func_names.append(func_name)
@@ -132,6 +152,7 @@ def create_reward_funcs_file(reward_funcs: list[str], task_id: str, destination_
         for reward_func in reward_funcs:
             f.write(f"{reward_func}\n\n")
 
+    logger.info(f"[job_handler] wrote {len(func_names)} reward function(s) to {filepath}")
     return filename, func_names
 
 

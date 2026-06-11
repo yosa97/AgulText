@@ -27,9 +27,7 @@ from peft import (
 )
 import traceback
 from transformers import TrainerCallback
-import argparse
-import math
-from customized_trainer import resize_if_needed, set_generation_config, CustomEvalSaveCallback, WhenToEvalHandler, init_wandb, GRPOCustomEvalSaveCallback
+from customized_trainer import resize_if_needed, set_generation_config, GRPOCustomEvalSaveCallback, WhenToEvalHandler
 from transformers.modeling_utils import is_deepspeed_zero3_enabled
 import os
 import glob
@@ -40,16 +38,13 @@ from transformers import (
     TrainerState,
     TrainerControl,
 )
-import os
 import datetime
 import shutil
-from huggingface_hub import HfApi
 from typing import Callable, Optional
 import bitsandbytes as bnb
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 import yaml
 from tokenize_grpo import get_dataset
-from customized_trainer import resize_if_needed, set_generation_config, CustomEvalSaveCallback, WhenToEvalHandler, init_wandb
 
 LOCAL_RANK = int(os.getenv("LOCAL_RANK", "0"))
 GRPO_DEFAULT_NUM_GENERATIONS = 2
@@ -77,36 +72,54 @@ def find_all_linear_names(model):
     return list(lora_module_names)
 
 
-def print_trainable_parameters(model):
-    """
-    Prints the number of trainable parameters in the model.
-    """
-    lora_param_count = 0
-    all_param = 0
-    embedding_lm_head_param_count = 0
-    for name, param in model.named_parameters():
-        num_params = param.numel()
-        # if using DS Zero 3 and the weights are initialized empty
-        if num_params == 0 and hasattr(param, "ds_numel"):
-            num_params = param.ds_numel
+def log_trainable_param_summary(model):
+    """Summarise trainable / frozen parameter counts in a single log line."""
+    total_params = 0
+    trainable_params = 0
+    adapter_params = 0
+    embedding_params = 0
 
-        all_param += num_params
+    for name, param in model.named_parameters():
+        n = param.numel() if param.numel() > 0 else getattr(param, "ds_numel", 0)
+        total_params += n
         if param.requires_grad:
-            log_info(f"trainable: {name}, num_params: {num_params}")
-            if "lm_head" in name or "embed_tokens" in name:
-                embedding_lm_head_param_count += num_params
+            trainable_params += n
+            if any(k in name for k in ("lm_head", "embed_tokens", "embed_")):
+                embedding_params += n
             else:
-                lora_param_count += num_params
-    trainable_params = embedding_lm_head_param_count + lora_param_count
+                adapter_params += n
+
+    frozen_params = total_params - trainable_params
+    pct = 100.0 * trainable_params / max(total_params, 1)
     log_info(
-        f"all params: {all_param:,d} || trainable params: {trainable_params:,d} || trainable%: {100 * trainable_params / all_param}"
+        f"Param summary | total={total_params:,d} | trainable={trainable_params:,d} ({pct:.2f}%) "
+        f"| frozen={frozen_params:,d} | adapter={adapter_params:,d} | embedding={embedding_params:,d}"
     )
-    log_info(
-        f"embedding_lm_head_param_count: {embedding_lm_head_param_count} = {embedding_lm_head_param_count * 100 / all_param} %"
-    )
-    log_info(
-        f"loara_param: {lora_param_count} = {lora_param_count * 100 / all_param} %"
-    )
+
+
+def compute_reward_batch_stats(reward_list: list, func_name: str) -> dict:
+    """
+    Compute running statistics (mean, std, min, max, nonzero fraction) over
+    accumulated reward values for one reward function.  Used for monitoring
+    reward distribution health during GRPO training.
+    """
+    if not reward_list:
+        return {}
+    n = len(reward_list)
+    mean_r = sum(reward_list) / n
+    variance = sum((r - mean_r) ** 2 for r in reward_list) / max(n - 1, 1)
+    std_r = variance ** 0.5
+    nonzero = sum(1 for r in reward_list if abs(r) > 1e-9) / n
+    stats = {
+        "mean": round(mean_r, 5),
+        "std": round(std_r, 5),
+        "min": round(min(reward_list), 5),
+        "max": round(max(reward_list), 5),
+        "nonzero_frac": round(nonzero, 3),
+        "n": n,
+    }
+    log_info(f"reward_stats[{func_name}]: {stats}")
+    return stats
 
 
 def get_max_length_config():
@@ -298,11 +311,17 @@ def get_reward_funcs(dataset_type: dict, sample_data, has_extra_column: bool):
                     return weighted_results
             else:
                 print(f"Not using extra data for {func_name}")
+                _call_count = [0]
+
                 def wrapper(completions, **kwargs):
                     raw_results = original_func(completions)
                     raw_rewards[func_name].extend(raw_results)
                     weighted_results = [r * weight for r in raw_results]
                     captured_rewards[func_name].extend(weighted_results)
+                    _call_count[0] += 1
+                    # Log reward distribution every 50 batches for health monitoring
+                    if _call_count[0] % 50 == 0:
+                        compute_reward_batch_stats(list(raw_rewards[func_name][-200:]), func_name)
                     return weighted_results
 
             return wrapper
@@ -419,6 +438,8 @@ def main():
     if peft_config is None:  # this is full-weight training
         # some model need to resize the token embeddings or encounter the size mismatch error; only for full-weight models
         resize_if_needed(train_request["model_name"], model, len(tokenizer))
+
+    log_trainable_param_summary(model)
 
     # Check if this is the main process and create the output directory
     if is_main_process(LOCAL_RANK):  # Only create directory on main process

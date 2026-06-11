@@ -55,3 +55,34 @@ def get_logger(name: str):
 
     logger.debug(f"Logging mode is {logging.getLevelName(logger.getEffectiveLevel())}")
     return logger
+
+
+def get_training_logger(task_id: str, log_dir: str | None = None) -> logging.Logger:
+    """Create a training-run logger that writes both to console (coloured) and
+    optionally to a rotating file in *log_dir*.
+
+    Parameters
+    ----------
+    task_id:  SN56 task identifier; used as the logger name and in the filename.
+    log_dir:  Directory for the log file.  Pass None to skip file logging.
+    """
+    import datetime
+    from logging.handlers import RotatingFileHandler
+
+    logger = get_logger(task_id)
+
+    if log_dir is not None:
+        os.makedirs(log_dir, exist_ok=True)
+        ts = datetime.datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        log_path = os.path.join(log_dir, f"train_{task_id}_{ts}.log")
+        fh = RotatingFileHandler(log_path, maxBytes=50 * 1024 * 1024, backupCount=3)
+        fh.setLevel(logging.DEBUG)
+        plain_fmt = logging.Formatter(
+            "%(asctime)s | %(levelname)-8s | %(name)s:%(funcName)s:%(lineno)d - %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
+        fh.setFormatter(plain_fmt)
+        logger.addHandler(fh)
+        logger.debug(f"File logging enabled → {log_path}")
+
+    return logger

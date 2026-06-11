@@ -54,3 +54,26 @@ def get_axolotl_base_config_path(dataset_type) -> str:
 def get_text_base_model_path(model_id: str) -> str:
     model_folder = model_id.replace("/", "--")
     return str(Path(train_cst.CACHE_MODELS_DIR) / model_folder)
+
+
+def get_submission_staging_path(task_id: str) -> str:
+    """Return the ephemeral staging dir used while uploading a checkpoint.
+
+    The staging dir is cleaned up after a successful upload so that partial
+    uploads are never mistaken for complete checkpoints.
+    """
+    return str(
+        Path(train_cst.OUTPUT_CHECKPOINTS_PATH)
+        / task_id
+        / train_cst.SUBMISSION_STAGING_SUBDIR
+    )
+
+
+def get_perf_log_path(task_id: str) -> str:
+    """Return path for the JSON-lines performance log (step timing, VRAM, etc.)."""
+    return str(Path(train_cst.WANDB_LOGS_DIR) / f"perf_{task_id}.jsonl")
+
+
+def get_noise_checkpoint_path(task_id: str) -> str:
+    """Return path where the noise-injected final checkpoint is staged."""
+    return str(Path(train_cst.OUTPUT_CHECKPOINTS_PATH) / task_id / "noised_final")

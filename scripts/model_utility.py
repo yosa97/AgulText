@@ -185,3 +185,44 @@ def get_data_size(data_path: str) -> int:
     with open(data_path, "r") as f:
         data = json.load(f)
     return len(data)
+
+
+# Architecture family groupings used for training config decisions.
+_LLAMA_FAMILY = frozenset([
+    "llamaforcausallm", "qwen2forcausallm", "qwen3forcausallm",
+    "qwen3moeforcausallm", "mistralforcausallm", "mixtralforcausallm",
+    "gemma2forcausallm", "gemmaforcausallm", "phi3forcausallm",
+    "deepseekv2forcausallm", "deepseekv3forcausallm",
+])
+_GPT_FAMILY = frozenset([
+    "gptneoforcausallm", "gptjforcausallm", "gptneoxforcausallm",
+    "gptossforcausallm",
+])
+_BLOOM_FAMILY = frozenset(["bloomforcausallm"])
+_PHI_FAMILY = frozenset(["phiforcausallm", "phi3forcausallm"])
+_FALCON_FAMILY = frozenset(["falconforcausallm"])
+_OPT_FAMILY = frozenset(["optforcausallm"])
+
+
+def get_architecture_family(architecture: str) -> str:
+    """Return a coarse family label for the given HF architecture string.
+
+    Useful for routing training config logic without a long chain of
+    if/elif comparisons against raw architecture names.
+
+    Returns one of: "llama", "gpt", "bloom", "phi", "falcon", "opt", "unknown".
+    """
+    arch = architecture.strip().lower()
+    if arch in _LLAMA_FAMILY:
+        return "llama"
+    if arch in _GPT_FAMILY:
+        return "gpt"
+    if arch in _BLOOM_FAMILY:
+        return "bloom"
+    if arch in _PHI_FAMILY:
+        return "phi"
+    if arch in _FALCON_FAMILY:
+        return "falcon"
+    if arch in _OPT_FAMILY:
+        return "opt"
+    return "unknown"

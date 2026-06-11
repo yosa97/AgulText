@@ -57,17 +57,48 @@ class MyDataset(Dataset):
         super().__init__()
         with open(data_path, 'r') as file:
             self.eval_dataset = json.load(file)
-            
+
         self.tokenizer = tokenizer
         self.max_length = max_length
         print("padding_side: ", self.tokenizer.padding_side)
-        
+
     def __len__(self):
         return len(self.eval_dataset)
-    
+
     def __getitem__(self, idx):
         dp = self.eval_dataset[idx]
         input_dict = pad_inputs(self.tokenizer, dp, self.max_length, self.tokenizer.padding_side)
         for key in input_dict:
             input_dict[key] = torch.tensor(input_dict[key])
         return input_dict
+
+    def get_length_stats(self) -> dict:
+        """Return min/max/mean token length across all samples (input_ids)."""
+        lengths = [len(item.get("input_ids", [])) for item in self.eval_dataset]
+        if not lengths:
+            return {"min": 0, "max": 0, "mean": 0.0, "count": 0}
+        return {
+            "min": min(lengths),
+            "max": max(lengths),
+            "mean": sum(lengths) / len(lengths),
+            "count": len(lengths),
+        }
+
+
+def get_gpu_memory_stats() -> dict:
+    """Return per-device VRAM usage as {device_idx: {"used_gb": ..., "total_gb": ...}}.
+
+    Gracefully returns an empty dict if CUDA is not available.
+    """
+    if not torch.cuda.is_available():
+        return {}
+    stats: dict = {}
+    for i in range(torch.cuda.device_count()):
+        props = torch.cuda.get_device_properties(i)
+        used = torch.cuda.memory_allocated(i)
+        stats[i] = {
+            "used_gb": round(used / 1024 ** 3, 3),
+            "total_gb": round(props.total_memory / 1024 ** 3, 3),
+            "device_name": props.name,
+        }
+    return stats

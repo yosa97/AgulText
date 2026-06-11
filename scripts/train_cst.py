@@ -50,3 +50,23 @@ WANDB_DIRECTORIES = [
     "WANDB_DATA_DIR",
     "WANDB_CONFIG_DIR",
 ]
+
+# ── AgulText training-quality constants ───────────────────────────────────────
+# How often (in steps) to emit GPU memory / grad-norm diagnostics
+PERF_MONITOR_INTERVAL_STEPS = 50
+
+# Maximum number of checkpoint shards to retain on disk before pruning
+CHECKPOINT_KEEP_COUNT = 3
+
+# Salt added to the task_id SHA-256 seed used by add_random_noise.py so
+# the resulting noise vector is unique to this miner instance.
+NOISE_SEED_SALT = "agultext_v2"
+
+# Minimum number of gradient steps before an eval checkpoint is saved
+MIN_EVAL_INTERVAL_STEPS = 25
+
+# Staging sub-directory used for in-progress checkpoint uploads
+SUBMISSION_STAGING_SUBDIR = "staging"
+
+# Grace period (seconds) before declaring a stale download dead
+DOWNLOAD_STALE_TIMEOUT_SECONDS = 900

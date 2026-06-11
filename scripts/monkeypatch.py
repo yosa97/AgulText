@@ -1,4 +1,4 @@
-# this file was created based on code from various sources, including: axolotl, ...
+# this file was created based on code from various sources, including: axolotl, flash-attention, HuggingFace transformers
 import torch
 import torch.nn.functional as F
 import transformers
@@ -289,7 +289,6 @@ class PackedDataset(Dataset):
         result_str += f"number of original data points:{len(self.data_points)}; packed to: {len(self.groups)} data points"
         original_avg_length = sum(self.lengths) / len(self.lengths)
         result_str += f"original avg length: {original_avg_length}; "
-        original_avg_length = sum(self.lengths) / len(self.lengths)
 
         packed_lengths = []
         for group in self.groups:
@@ -299,3 +298,61 @@ class PackedDataset(Dataset):
         avg_packed_length = sum(packed_lengths) / len(packed_lengths)
         result_str += f"original avg length: {original_avg_length}; avg packed length: {avg_packed_length}"
         return result_str
+
+    def compute_padding_waste_ratio(self) -> float:
+        """Return the fraction of tokens that are padding across all packed groups.
+
+        A ratio near 0 means excellent packing; near 1 means most tokens are pad.
+        Useful for logging and diagnosing packing efficiency.
+        """
+        total_slots = len(self.groups) * self.max_input_length
+        total_real = sum(self.lengths)
+        if total_slots == 0:
+            return 0.0
+        waste = (total_slots - total_real) / total_slots
+        print(
+            f"[PackedDataset] padding_waste_ratio={waste:.3f} "
+            f"({total_slots - total_real:,} pad / {total_slots:,} total slots)",
+            flush=True,
+        )
+        return waste
+
+
+def pack_with_balanced_lengths(
+    lengths: List[int],
+    max_length: int,
+    n_groups: int,
+) -> List[List[int]]:
+    """Greedy balanced packing: distribute items into exactly *n_groups* bins
+    while respecting *max_length*, minimising the variance in total bin length.
+
+    Falls back to ``pack_data_points_by_length`` if *n_groups* ≥ len(lengths).
+    """
+    if n_groups >= len(lengths):
+        return pack_data_points_by_length(lengths, max_length)
+
+    # Descending sort, then first-fit-decreasing into n_groups bins
+    indexed = sorted(enumerate(lengths), key=lambda x: x[1], reverse=True)
+    bins: List[List[int]] = [[] for _ in range(n_groups)]
+    bin_totals: List[int] = [0] * n_groups
+
+    for orig_idx, length in indexed:
+        # Pick the bin with the smallest current total that can still fit this item
+        eligible = [
+            (bin_totals[b], b)
+            for b in range(n_groups)
+            if bin_totals[b] + length <= max_length
+        ]
+        if eligible:
+            _, target_bin = min(eligible)
+        else:
+            # No bin fits: start a new group (overflow)
+            bins.append([])
+            bin_totals.append(0)
+            target_bin = len(bins) - 1
+
+        bins[target_bin].append(orig_idx)
+        bin_totals[target_bin] += length
+
+    # Drop empty bins
+    return [b for b in bins if b]

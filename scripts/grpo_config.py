@@ -160,12 +160,21 @@ def get_grpo_config(param_nums: int) -> dict:
         }
 
 
-def contain_python_execution(dataset_type: dict) -> bool:
+def _detect_python_execution_tasks(dataset_type: dict) -> bool:
+    """
+    Return True if the GRPO dataset uses reward functions that require
+    server-side Python execution (SAT/DED/ABD solvers).  These tasks need
+    the grpo_python LR table instead of the standard grpo table.
+    """
     reward_functions = dataset_type["reward_functions"]
+    _solver_keywords = frozenset([
+        "sat_reward_function",
+        "ded_reward_function",
+        "abd_reward_function",
+    ])
     for reward_func in reward_functions:
         func_def = reward_func["reward_func"]
-        keywords = ["sat_reward_function", "ded_reward_function", "abd_reward_function"]
-        if any(keyword in func_def for keyword in keywords):
+        if any(kw in func_def for kw in _solver_keywords):
             return True
     return False
 
@@ -334,7 +343,7 @@ def get_training_json(train_info: dict) -> dict:
 
     if train_info["find_lk_lr"] and allow_find_lk_lr:
         # get lr from lrs_lookup.py
-        has_python_execution = contain_python_execution(train_info["dataset_type"])
+        has_python_execution = _detect_python_execution_tasks(train_info["dataset_type"])
         if not has_python_execution:
             lr = get_grpo_lr(model_name)
             print(f"Using lr from lk not python: {lr}", flush=True)

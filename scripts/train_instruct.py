@@ -65,37 +65,91 @@ def find_all_linear_names(model):
     return list(lora_module_names)
 
 
-def print_trainable_parameters(model):
-    """
-    Prints the number of trainable parameters in the model.
-    """
-    lora_param_count = 0
-    all_param = 0
-    embedding_lm_head_param_count = 0
-    for name, param in model.named_parameters():
-        num_params = param.numel()
-        # if using DS Zero 3 and the weights are initialized empty
-        if num_params == 0 and hasattr(param, "ds_numel"):
-            num_params = param.ds_numel
+def log_trainable_param_summary(model):
+    """Log trainable vs frozen parameter breakdown for the model."""
+    total_params = 0
+    trainable_params = 0
+    adapter_params = 0
+    embedding_params = 0
 
-        all_param += num_params
+    for name, param in model.named_parameters():
+        n = param.numel() if param.numel() > 0 else getattr(param, "ds_numel", 0)
+        total_params += n
         if param.requires_grad:
-            log_info(f"trainable: {name}, num_params: {num_params}")
-            if "lm_head" in name or "embed_tokens" in name:
-                embedding_lm_head_param_count += num_params
+            trainable_params += n
+            if any(k in name for k in ("lm_head", "embed_tokens", "embed_")):
+                embedding_params += n
             else:
-                lora_param_count += num_params
-    trainable_params = embedding_lm_head_param_count + lora_param_count
+                adapter_params += n
+
+    frozen_params = total_params - trainable_params
+    pct = 100.0 * trainable_params / max(total_params, 1)
     log_info(
-        f"all params: {all_param:,d} || trainable params: {trainable_params:,d} || trainable%: {100 * trainable_params / all_param}"
+        f"Param summary | total={total_params:,d} | trainable={trainable_params:,d} ({pct:.2f}%) "
+        f"| frozen={frozen_params:,d} | adapter={adapter_params:,d} | embedding={embedding_params:,d}"
     )
-    log_info(
-        f"embedding_lm_head_param_count: {embedding_lm_head_param_count} = {embedding_lm_head_param_count * 100 / all_param} %"
-    )
-    log_info(
-        f"loara_param: {lora_param_count} = {lora_param_count * 100 / all_param} %"
-    )
-    
+
+
+class KLRegularizedTrainer(Trainer):
+    """
+    Trainer with optional KL-divergence regularisation against the frozen base.
+    When kl_coef > 0 and the model has LoRA adapters, the loss becomes:
+        total_loss = ce_loss + kl_coef * KL(fine-tuned || base)
+    The KL term is computed by temporarily disabling the adapter layers so we
+    can get base-model logits without loading a second copy of the model.
+    This matches the validator's evaluation weighting (kl_coef is sent per-task).
+    """
+
+    def __init__(self, *args, kl_coef: float = 0.0, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.kl_coef = kl_coef
+        self._has_peft = False
+        try:
+            from peft import PeftModel
+            self._has_peft = isinstance(self.model, PeftModel)
+        except ImportError:
+            pass
+        log_info(f"KLRegularizedTrainer: kl_coef={kl_coef}, has_peft={self._has_peft}")
+
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        outputs = model(**inputs)
+        ce_loss = outputs.loss if (hasattr(outputs, "loss") and outputs.loss is not None) else outputs[0]
+
+        if self.kl_coef <= 0.0 or not self._has_peft:
+            return (ce_loss, outputs) if return_outputs else ce_loss
+
+        # Get base-model logits without a second forward pass allocation
+        with torch.no_grad():
+            try:
+                model.disable_adapter_layers()
+                ref_out = model(**inputs)
+                model.enable_adapter_layers()
+            except Exception as e:
+                log_info(f"KL computation skipped: {e}")
+                return (ce_loss, outputs) if return_outputs else ce_loss
+
+        # Numerically stable KL(train || base) on non-padding tokens only
+        train_log = torch.nn.functional.log_softmax(outputs.logits.float(), dim=-1)
+        ref_log = torch.nn.functional.log_softmax(ref_out.logits.float(), dim=-1)
+        kl_per_token = (torch.exp(train_log) * (train_log - ref_log)).sum(dim=-1)  # [B, T]
+
+        if "labels" in inputs:
+            mask = (inputs["labels"] != -100).float()
+            kl_loss = (kl_per_token * mask).sum() / (mask.sum().clamp(min=1.0))
+        else:
+            kl_loss = kl_per_token.mean()
+
+        total_loss = ce_loss + self.kl_coef * kl_loss
+
+        if self.state.global_step % 20 == 0 and is_main_process(LOCAL_RANK):
+            log_info(
+                f"step={self.state.global_step} ce={ce_loss.item():.4f} "
+                f"kl={kl_loss.item():.4f} total={total_loss.item():.4f}"
+            )
+
+        return (total_loss, outputs) if return_outputs else total_loss
+
+
 
 def load_lora_model(training_args: TrainingArguments, model_path: str, lora_args: LoraArguments, token_nums: int):
     if training_args.use_liger:
@@ -322,14 +376,21 @@ def main():
         model = load_model(training_args, train_request["model_path"], len(tokenizer))
         # some model need to resize the token embeddings or encounter the size mismatch error; only for full-weight models
         resize_if_needed(train_request["model_name"], model, len(tokenizer))
-    
+
+    log_trainable_param_summary(model)
+
     try:
         model.config.use_cache = False
     except:
         pass
-    
+
     # some model need to set the generation config or encounter the invalid generation config error
     set_generation_config(train_request["model_name"], model)
+
+    # KL regularization: validator sends kl_coef > 0 for ~20% of instruct tasks.
+    # When present, we train with loss = ce_loss + kl_coef * KL(model || base).
+    kl_coef = float(train_request.get("kl_coef", 0.0))
+    log_info(f"kl_coef={kl_coef} (from train_request)")
 
     # Check if this is the main process and create the output directory
     if is_main_process(LOCAL_RANK):  # Only create directory on main process
@@ -373,26 +434,46 @@ def main():
     if checking_step >= total_steps_per_epoch:
         checking_step = total_steps_per_epoch - 2
     
-    trainer = Trainer(
-        model=model,
-        tokenizer=tokenizer,
-        args=training_args,
-        train_dataset=train_ds,
-        eval_dataset=dev_ds,
-        callbacks=[
-            CustomEvalSaveCallback(
-                WhenToEvalHandler(train_request["end_time"], train_request["save_before_remaining_time"], periodic_save_steps=periodic_save_steps, steps_per_epoch=total_steps_per_epoch, max_steps=max_steps),
-                train_request["submission_dir"],
-                training_args.output_dir,
-                train_request["model_name"],
-                max_steps, 
-                checking_step=checking_step,
-                total_steps_all_epochs=total_steps_all_epochs,
-                end_time=train_request["end_time"],
-                checking_mode=train_request.get("checking_mode", "none")
-            )
-        ],
+    _eval_callback = CustomEvalSaveCallback(
+        WhenToEvalHandler(
+            train_request["end_time"],
+            train_request["save_before_remaining_time"],
+            periodic_save_steps=periodic_save_steps,
+            steps_per_epoch=total_steps_per_epoch,
+            max_steps=max_steps,
+        ),
+        train_request["submission_dir"],
+        training_args.output_dir,
+        train_request["model_name"],
+        max_steps,
+        checking_step=checking_step,
+        total_steps_all_epochs=total_steps_all_epochs,
+        end_time=train_request["end_time"],
+        checking_mode=train_request.get("checking_mode", "none"),
     )
+
+    # Use KLRegularizedTrainer when the validator requests KL regularization.
+    # Falls back to standard Trainer when kl_coef == 0 (no-op, identical behaviour).
+    if kl_coef > 0.0:
+        log_info(f"Using KLRegularizedTrainer with kl_coef={kl_coef}")
+        trainer = KLRegularizedTrainer(
+            model=model,
+            tokenizer=tokenizer,
+            args=training_args,
+            train_dataset=train_ds,
+            eval_dataset=dev_ds,
+            kl_coef=kl_coef,
+            callbacks=[_eval_callback],
+        )
+    else:
+        trainer = Trainer(
+            model=model,
+            tokenizer=tokenizer,
+            args=training_args,
+            train_dataset=train_ds,
+            eval_dataset=dev_ds,
+            callbacks=[_eval_callback],
+        )
 
     trainer.tokenizer = tokenizer
     # last_checkpoint = get_last_checkpoint(training_args.output_dir)

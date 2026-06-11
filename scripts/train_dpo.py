@@ -72,35 +72,28 @@ def find_all_linear_names(model):
     return list(lora_module_names)
 
 
-def print_trainable_parameters(model):
-    """
-    Prints the number of trainable parameters in the model.
-    """
-    lora_param_count = 0
-    all_param = 0
-    embedding_lm_head_param_count = 0
-    for name, param in model.named_parameters():
-        num_params = param.numel()
-        # if using DS Zero 3 and the weights are initialized empty
-        if num_params == 0 and hasattr(param, "ds_numel"):
-            num_params = param.ds_numel
+def log_trainable_param_summary(model):
+    """Summarise trainable / frozen parameter counts in a single log line."""
+    total_params = 0
+    trainable_params = 0
+    adapter_params = 0
+    embedding_params = 0
 
-        all_param += num_params
+    for name, param in model.named_parameters():
+        n = param.numel() if param.numel() > 0 else getattr(param, "ds_numel", 0)
+        total_params += n
         if param.requires_grad:
-            log_info(f"trainable: {name}, num_params: {num_params}")
-            if "lm_head" in name or "embed_tokens" in name:
-                embedding_lm_head_param_count += num_params
+            trainable_params += n
+            if any(k in name for k in ("lm_head", "embed_tokens", "embed_")):
+                embedding_params += n
             else:
-                lora_param_count += num_params
-    trainable_params = embedding_lm_head_param_count + lora_param_count
+                adapter_params += n
+
+    frozen_params = total_params - trainable_params
+    pct = 100.0 * trainable_params / max(total_params, 1)
     log_info(
-        f"all params: {all_param:,d} || trainable params: {trainable_params:,d} || trainable%: {100 * trainable_params / all_param}"
-    )
-    log_info(
-        f"embedding_lm_head_param_count: {embedding_lm_head_param_count} = {embedding_lm_head_param_count * 100 / all_param} %"
-    )
-    log_info(
-        f"loara_param: {lora_param_count} = {lora_param_count * 100 / all_param} %"
+        f"Param summary | total={total_params:,d} | trainable={trainable_params:,d} ({pct:.2f}%) "
+        f"| frozen={frozen_params:,d} | adapter={adapter_params:,d} | embedding={embedding_params:,d}"
     )
 
 
@@ -261,6 +254,21 @@ def main():
     log_info(f"periodic_save_steps: {periodic_save_steps}")
 
     training_args.save_only_model = True  # only save the model, not the optimizer
+
+    # Apply per-task beta override if provided in the training request (set by dpo_config.py).
+    task_beta = train_request.get("beta", None)
+    if task_beta is not None and abs(task_beta - training_args.beta) > 1e-6:
+        log_info(f"Overriding DPO beta: {training_args.beta} -> {task_beta} (from train_request)")
+        training_args.beta = task_beta
+    log_info(f"DPO beta={training_args.beta}")
+
+    # Light label smoothing reduces overconfidence on preferred responses.
+    label_smoothing = float(train_request.get("label_smoothing", 0.0))
+    if label_smoothing > 0.0:
+        log_info(f"Applying label_smoothing={label_smoothing}")
+        training_args.label_smoothing = label_smoothing
+
+    log_trainable_param_summary(model)
 
     if training_args.gradient_checkpointing:
         training_args.gradient_checkpointing_kwargs = {"use_reentrant": False}
