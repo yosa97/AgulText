@@ -357,6 +357,14 @@ def main():
         )
         is_openai = True
 
+    # Read KL regularisation env vars sent by validator (~20% of instruct tasks).
+    # USE_KL=1 means the scorer will add KL_COEF * KL(model || base) to eval loss,
+    # so we must match that objective during training via KLRegularizedTrainer.
+    _use_kl = os.getenv("USE_KL", "0") == "1"
+    _kl_coef = float(os.getenv("KL_COEF", "0.0")) if _use_kl else 0.0
+    if _use_kl:
+        print(f"[text_trainer] KL task detected: USE_KL=1, KL_COEF={_kl_coef}", flush=True)
+
     train_info = {
         "model_name": original_model_name,
         "model_path": model_path,
@@ -378,6 +386,7 @@ def main():
         "reg_ratio": args.reg_ratio,
         "find_lk_lr": True,
         "checking_mode": "first_time",
+        "kl_coef": _kl_coef,
     }
 
     if (
