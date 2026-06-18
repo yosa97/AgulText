@@ -126,7 +126,7 @@ def _validate_reward_func_syntax(reward_func: str, func_index: int) -> list[str]
     return warnings
 
 
-def create_reward_funcs_file(reward_funcs: list[str], task_id: str, destination_dir: str = cst.CONFIG_DIR) -> list[str]:
+def create_reward_funcs_file(reward_funcs: list[str], task_id: str, destination_dir: str = cst.CONFIG_DIR) -> tuple[str, list[str]]:
     """Create a Python file with reward functions for GRPO training.
 
     Args:
