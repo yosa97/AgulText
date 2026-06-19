@@ -31,25 +31,28 @@ INSTRUCT_CONFIG = {
         "lr": 0.0001,
         "distributed": "ddp",
         "gpu_count": 1,
-        "use_lora": False,
+        "use_lora": True,   # LoRA prevents OOM on tight-budget tasks (e.g. 45-min, 1.7B model)
         "batch_size": 100,
     },
     "2_4_b": {
         "lr": 7.5e-5,
         "distributed": "ddp",
         "gpu_count": 1,
+        "use_lora": True,   # full weight 2-4B on 1 GPU risks OOM on tight-budget tasks
         "batch_size": 48,
     },
     "4_5_b": {
         "lr": 7e-5,
         "distributed": "ddp",
         "gpu_count": 2,
+        "use_lora": True,   # full weight 4-5B without LoRA may OOM under short deadlines
         "batch_size": 40,
     },
     "5_9_b": {
         "lr": 3.5e-5,
         "distributed": "ddp",
         "gpu_count": 2,
+        "use_lora": True,   # 5-9B full weight is very memory-intensive; LoRA is safer
         "batch_size": 28,
     },
     "9_12_b": {

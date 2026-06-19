@@ -433,7 +433,23 @@ def main():
     checking_step = train_request["checking_step"]
     if checking_step >= total_steps_per_epoch:
         checking_step = total_steps_per_epoch - 2
-    
+
+    # Guard: dataset terlalu kecil sehingga checking_step jadi <= 0 (misal -2).
+    # Dalam kondisi ini LR-search loop di text_trainer.py tidak akan pernah selesai
+    # karena on_step_end checking block tidak pernah dicapai dan state["mode"]
+    # tidak pernah diubah dari "initial". Paksa mode="finish" agar loop keluar.
+    if checking_step <= 0:
+        log_info(
+            f"Dataset too small for LR search (checking_step={checking_step}, "
+            f"total_steps_per_epoch={total_steps_per_epoch}). "
+            f"Forcing state mode='finish' to prevent infinite loop."
+        )
+        checking_step = 1  # fallback agar tidak ada nilai negatif di callback
+        if is_main_process(LOCAL_RANK):
+            _tiny_state = get_state()
+            _tiny_state["mode"] = "finish"
+            set_state(_tiny_state)
+
     _eval_callback = CustomEvalSaveCallback(
         WhenToEvalHandler(
             train_request["end_time"],
