@@ -8,6 +8,7 @@ from model_utility import (
 )
 from copy import deepcopy
 from lrs_lookup import get_instruct_lr
+from lr_estimator import estimate_lr as _estimate_lr
 
 
 FIXED_BS_CONFIG = {
@@ -31,28 +32,33 @@ INSTRUCT_CONFIG = {
         "lr": 0.0001,
         "distributed": "ddp",
         "gpu_count": 1,
-        "use_lora": True,   # LoRA prevents OOM on tight-budget tasks (e.g. 45-min, 1.7B model)
+        # Full weight for best model quality; OOM is prevented by adaptive max_length
+        # (seq_length_analyzer sets max_length to actual data p90, e.g. 256 for wiki_qa)
+        "use_lora": False,
         "batch_size": 100,
     },
     "2_4_b": {
         "lr": 7.5e-5,
         "distributed": "ddp",
         "gpu_count": 1,
-        "use_lora": True,   # full weight 2-4B on 1 GPU risks OOM on tight-budget tasks
+        # Full weight; adaptive max_length reduces memory usage for short-context tasks
+        "use_lora": False,
         "batch_size": 48,
     },
     "4_5_b": {
         "lr": 7e-5,
         "distributed": "ddp",
         "gpu_count": 2,
-        "use_lora": True,   # full weight 4-5B without LoRA may OOM under short deadlines
+        # Full weight; OOM handled via adaptive max_length + batch_size fallback
+        "use_lora": False,
         "batch_size": 40,
     },
     "5_9_b": {
         "lr": 3.5e-5,
         "distributed": "ddp",
         "gpu_count": 2,
-        "use_lora": True,   # 5-9B full weight is very memory-intensive; LoRA is safer
+        # Full weight; OOM handled via adaptive max_length + batch_size + max_length fallback
+        "use_lora": False,
         "batch_size": 28,
     },
     "9_12_b": {
@@ -134,6 +140,7 @@ def get_run_cmd(config: dict, gpu_nums: int):
         "use_lora",
         "packing",
         "disable_fa",
+        "warmup_steps",
     ]
     for key in required_keys:
         if key not in config:
@@ -164,12 +171,13 @@ def get_run_cmd(config: dict, gpu_nums: int):
     --logging_steps 5 \
     --learning_rate {learning_rate} \
     --weight_decay 0. \
-    --warmup_steps 35 \
+    --warmup_steps {warmup_steps} \
     --lr_scheduler_type cosine_with_min_lr \
     --lr_scheduler_kwargs "{\\"min_lr_rate\\": {min_lr_rate}}" \
     --tf32 True \
     --gradient_checkpointing {gradient_checkpointing} \
     --optim {optimizer} \
+    --dataloader_pin_memory True \
     --use_liger {use_liger} \
     --packing {packing} --disable_fa {disable_fa}"""
     )
@@ -197,8 +205,18 @@ def get_training_json(train_info: dict) -> dict:
     model_architecture = get_model_architecture(model_path)
     param_nums = get_model_num_params(model_name, model_path)
     config = get_instruct_config(param_nums)
+
+    # ── Adaptive epoch count ──────────────────────────────────────────────────
+    # With checking_mode="none" (single run), training never stops early via the
+    # state machine — it runs until num_train_epochs is reached OR end_time fires.
+    # The WhenToEvalHandler saves the BEST checkpoint, so extra epochs have no
+    # downside when the time budget allows them.
+    # Formula: epoch_num scales with hours so longer tasks do more epochs.
+    hours = float(train_info.get("hours_to_complete", 1.0))
+    epoch_num = max(3, min(8, round(hours * 4)))
+
     run_config = {
-        "epoch_num": 3,
+        "epoch_num": epoch_num,
         "batch_size": config["batch_size"],
         "learning_rate": config["lr"],
         "min_lr_rate": 0.25,
@@ -218,6 +236,8 @@ def get_training_json(train_info: dict) -> dict:
             if train_info.get("is_openai", False)
             else ""
         ),
+        # Dynamic warmup: ~10% of min_steps, bounded to [5, 50]
+        "warmup_steps": max(5, min(50, int(train_info.get("min_steps", 100) * 0.1))),
     }
 
     # there are models that do not support packing, so we need to check if the model supports packing
@@ -225,11 +245,6 @@ def get_training_json(train_info: dict) -> dict:
         "optforcausallm"
     ]:
         run_config["packing"] = "False"
-
-    # data_size = get_data_size(train_info["request_path"])
-
-    # if run_config["disable_fa"]: # if FA is not usable
-    #     run_config["batch_size"] = run_config["batch_size"] * 2
 
     if model_name in FIXED_BS_CONFIG:
         run_config["batch_size"] = FIXED_BS_CONFIG[model_name]["batch_size"]
@@ -268,15 +283,30 @@ def get_training_json(train_info: dict) -> dict:
         run_config["use_lora"] = False  # currently, gptoss does not support lora
 
     if train_info["find_lk_lr"]:
-        # get lr from lrs_lookup.py
-        lr = get_instruct_lr(model_name)
-        if lr is not None:
-            print(f"Using lr from lk: {lr}", flush=True)
-            run_config["learning_rate"] = lr
-        else:
-            print(f"Using lr from config: {run_config['learning_rate']}", flush=True)
+        # ── Ensemble LR: stats-based (lr_estimator) + historical lookup ──────
+        # _estimate_lr samples model weight RMS and combines with the hash-lookup
+        # table via geometric mean, giving the best of both sources.
+        effective_bs = (
+            run_config["batch_size"]
+            * run_config["gradient_accumulation_steps"]
+            * run_config["gpu_nums"]
+        )
+        computed_lr = _estimate_lr(
+            model_path=model_path,
+            model_name=model_name,
+            task_type="InstructTextTask",
+            param_count=param_nums,
+            effective_batch_size=effective_bs,
+            hours_to_complete=hours,
+            fallback_lr=run_config["learning_rate"],
+        )
+        print(f"[instruct_config] lr_estimator: {computed_lr:.3e}", flush=True)
+        run_config["learning_rate"] = computed_lr
 
+    # reg_ratio is 1.0 by default (text_trainer.py default); a no-op unless
+    # the validator explicitly overrides it via --reg-ratio.
     run_config["learning_rate"] *= train_info["reg_ratio"]
+
     run_cmd = get_run_cmd(run_config, run_config["gpu_nums"])
     train_request = deepcopy(train_info)
     train_request["save_before_remaining_time"] = 3

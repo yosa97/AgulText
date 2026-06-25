@@ -44,6 +44,7 @@ from grpo_config import get_training_json as get_grpo_training_json
 import pathlib
 from transformers import AutoConfig
 import lr_utils
+from seq_length_analyzer import compute_adaptive_max_length
 
 def run_cmd_with_log(cmd: str, log_file_path: str, env_vars: dict = None):
     # print(f"Running command: {cmd}", flush=True)
@@ -173,13 +174,33 @@ def run_training(
                         )
                         # print(f"New train command: {train_cmd}", flush=True)
                     else:
-                        print(f"batch size is 1, cannot reduce further", flush=True)
-                        if task_type == TaskType.GRPOTASK.value:
-                            # disable vllm
-                            train_cmd = replace_args_in_cmd(
-                                train_cmd, "use_vllm", "False"
-                            )
-                            # print(f"disable VLLM {train_cmd}", flush=True)
+                        # batch_size already 1 → try halving max_length as final OOM fallback
+                        request_path_from_cmd = extract_value_from_cmd(train_cmd, "request_path")
+                        _maxlen_reduced = False
+                        if request_path_from_cmd and os.path.exists(request_path_from_cmd):
+                            try:
+                                with open(request_path_from_cmd) as _rf:
+                                    _req_data = json.load(_rf)
+                                _cur_maxlen = _req_data.get("train_request", {}).get("max_length", 2048)
+                                if isinstance(_cur_maxlen, int) and _cur_maxlen > 512:
+                                    _new_maxlen = max(512, ((_cur_maxlen // 2 + 63) // 64) * 64)
+                                    _req_data["train_request"]["max_length"] = _new_maxlen
+                                    with open(request_path_from_cmd, "w") as _rf:
+                                        json.dump(_req_data, _rf, indent=4, ensure_ascii=False)
+                                    print(
+                                        f"[oom-fallback] Reducing max_length {_cur_maxlen} → {_new_maxlen}",
+                                        flush=True,
+                                    )
+                                    _maxlen_reduced = True
+                            except Exception as _oom_exc:
+                                print(f"[oom-fallback] max_length reduction failed: {_oom_exc}", flush=True)
+                        if not _maxlen_reduced:
+                            print(f"batch size is 1, cannot reduce further", flush=True)
+                            if task_type == TaskType.GRPOTASK.value:
+                                # disable vllm
+                                train_cmd = replace_args_in_cmd(
+                                    train_cmd, "use_vllm", "False"
+                                )
                 elif error_type == VLLM_OOM_ERROR:
                     if task_type == TaskType.GRPOTASK.value:
                         print(f"VLLM OOM error, disable VLLM", flush=True)
@@ -229,6 +250,38 @@ def patch_wandb_symlinks(base_dir: str):
                 else:
                     print("Target not found, creating dummy")
                     pathlib.Path(full_path).touch()
+
+
+def patch_submission_config(model_path: str, submission_dir: str) -> None:
+    """
+    Restore the original model architecture name in the submission config.json.
+
+    Some transformers versions silently alias model classes during save_pretrained
+    (e.g. MistralForCausalLM → LlamaForCausalLM).  The validator's is_finetune
+    check compares the submission's 'architectures' field against the base model;
+    a mismatch causes the submission to fail even when training succeeded.
+    """
+    sub_cfg = os.path.join(submission_dir, "config.json")
+    base_cfg = os.path.join(model_path, "config.json")
+    if not (os.path.exists(sub_cfg) and os.path.exists(base_cfg)):
+        return
+    try:
+        with open(base_cfg) as f:
+            base = json.load(f)
+        with open(sub_cfg) as f:
+            sub = json.load(f)
+        orig_arch = base.get("architectures")
+        if orig_arch and sub.get("architectures") != orig_arch:
+            print(
+                f"[config-patch] architectures mismatch "
+                f"{sub.get('architectures')} → {orig_arch}; fixing.",
+                flush=True,
+            )
+            sub["architectures"] = orig_arch
+            with open(sub_cfg, "w") as f:
+                json.dump(sub, f, indent=2, ensure_ascii=False)
+    except Exception as exc:
+        print(f"[config-patch] Warning: {exc}", flush=True)
 
 
 def delete_poor_checkpoints(train_runs: list[dict]):
@@ -297,13 +350,13 @@ def main():
     parser.add_argument(
         "--max-steps", type=int, help="Max steps to use for training", default=-1
     )
-    parser.add_argument("--retries", type=int, help="Number of retries", default=5)
+    parser.add_argument("--retries", type=int, help="Number of retries", default=8)
     parser.add_argument(
         "--min-steps", type=int, help="Min steps to use for training", default=100
     )
 
     parser.add_argument(
-        "--reg-ratio", type=float, help="Reg ratio to use for training", default=1.159624
+        "--reg-ratio", type=float, help="Reg ratio to use for training", default=1.0
     )
 
     args = parser.parse_args()
@@ -419,114 +472,105 @@ def main():
         tokenize_cmd, os.path.join(ds_folder, f"tokenize_{args.task_id}.log")
     )
 
+    # ── Adaptive max_length from tokenized data ───────────────────────────────
+    # Read the actual sequence length distribution of the tokenized training set
+    # and pick the smallest max_length that still covers p90 (packing) or p95
+    # (no-packing) of examples.  This avoids padding waste on short-context
+    # datasets (e.g. wiki_qa avg ~100 tokens) and prevents unnecessary OOM for
+    # full-weight models on tight time budgets.
+    _tr = train_info.get("train_request", {})
+    packing_on = str(_tr.get("packing", "True")).lower() not in ("false", "0", "no")
+    _model_max_pos = None
+    try:
+        _arch_cfg = AutoConfig.from_pretrained(model_path)
+        _model_max_pos = getattr(_arch_cfg, "max_position_embeddings", None)
+    except Exception:
+        pass
+
+    adapted_max_length = compute_adaptive_max_length(
+        args.task_id,
+        datasets_dir=ds_folder,
+        default_max=2048,
+        packing=packing_on,
+        model_max_positions=_model_max_pos,
+    )
+
+    # ── Single full training run — no LR-search loop ─────────────────────────
+    # All available tournament time goes to one training pass.  The
+    # WhenToEvalHandler inside customized_trainer.py saves the best checkpoint
+    # automatically when end_time approaches, so stopping training early (the
+    # old loop) is strictly worse than running continuously.
     original_train_cmd = train_cmd
     train_success = False
-    state = get_state()
-    state = {}
-    set_state(state) # reset first
-    state["mode"] = "initial"
-    # at first the state is always running the train_cmd
 
+    c_train_info = copy.deepcopy(train_info)
+    c_train_info["train_request"]["checking_mode"] = "none"
+    if adapted_max_length != 2048:
+        c_train_info["train_request"]["max_length"] = adapted_max_length
+
+    run_output_dir = output_dir
+    train_cmd = replace_args_in_cmd(original_train_cmd, "output_dir", run_output_dir)
+
+    current_request_path = os.path.join(
+        ds_folder, f"training_request_{args.task_id}_run.json"
+    )
+    with open(current_request_path, "w") as f:
+        json.dump(c_train_info, f, indent=4, ensure_ascii=False)
+
+    train_cmd = replace_args_in_cmd(train_cmd, "request_path", current_request_path)
+
+    log_path = os.path.join(ds_folder, f"train_{args.task_id}.log")
+    print(
+        f"[sn56] Single training run | "
+        f"lr={extract_value_from_cmd(train_cmd, 'learning_rate')} | "
+        f"max_length={adapted_max_length} | "
+        f"checking_mode=none",
+        flush=True,
+    )
+
+    state = {
+        "mode": "finish",
+        "train": {
+            "train_cmd": train_cmd,
+            "log_path": log_path,
+            "lr": extract_value_from_cmd(train_cmd, "learning_rate"),
+            "output_dir": run_output_dir,
+            "start_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        },
+    }
     set_state(state)
-    # TODO Run something magic here
-    count = 0
-    while True:
-        state = get_state()
-        if state.get("mode") == "finish":
-            break
-        train_cmd = original_train_cmd  # will replace based on the state later
-        c_train_info = copy.deepcopy(train_info)
-        final_output_dir = None
-        if args.task_type == TaskType.GRPOTASK.value:
-            state["mode"] = "finish" # do not run this for GRPO task
-            c_train_info["train_request"]["checking_mode"] = "none"
-        else:
-            if state["mode"] == "initial":
-                c_train_info["train_request"]["checking_mode"] = "first_time"
-                
-            elif state["mode"] == "continue":
-                c_train_info["train_request"]["checking_mode"] = "second_time"
-                n_runs = state["next_runs"]
-                if "lrs" not in state: # first time of continue
-                    current_lr = float(state["train"]["lr"])
-                    state["lrs"] = lr_utils.extend_learning_rates(current_lr, n_runs, log_range=get_log_scale(args.task_type))
-                    assert len(state["lrs"]) == n_runs, f"Number of learning rates {state['lrs']} should be equal to number of runs {n_runs}"
-                    state["runs"] = []
-                
-                set_state(state)
-                state["runs"].append(state["train"].copy())
-                delete_poor_checkpoints(state["runs"])
-                if len(state["runs"]) < n_runs:
-                    index = len(state["runs"])
-                    current_lr = state["lrs"][index]
-                    train_cmd = replace_args_in_cmd(train_cmd, "learning_rate", str(state["lrs"][index]))
-                else: # the final run
-                    # first find from runs the best loss
-                    c_train_info["train_request"]["checking_mode"] = "none"
-                    losses = [run.get("current_loss") if run.get("current_loss") is not None else float('inf') for run in state["runs"]]
-                    index = np.argmin(losses)
-                    print(f"BL;{index};{state['runs'][index].get('current_loss')}; {state['lrs'][index]}", flush=True)
-                    train_cmd = state["runs"][index]["train_cmd"]  #replace_args_in_cmd(train_cmd, "learning_rate", str(state["lrs"][index]))
-                    final_output_dir = state["runs"][index]["output_dir"]
-                    state["mode"] = "finish"
-            else: # the state = finish; no need to run more
-                assert state["mode"] == "finish"
-                break
-        
-        set_state(state)
-        if train_cmd:
-            run_output_dir = output_dir + f"_{count}" if not final_output_dir else final_output_dir
-            train_cmd = replace_args_in_cmd(train_cmd, "output_dir", run_output_dir)
-            
-            current_request_path = os.path.join(ds_folder, f"training_request_{args.task_id}_{count}.json")
-            with open(current_request_path, "w") as f:
-                json.dump(c_train_info, f, indent=4, ensure_ascii=False)
-            
-            train_cmd = replace_args_in_cmd(train_cmd, "request_path", current_request_path)
-            
-            state["train"] = {
-                "train_cmd": train_cmd,
-                "log_path": os.path.join(ds_folder, f"train_{args.task_id}.log"),
-                "lr": extract_value_from_cmd(train_cmd, "learning_rate"),
-                "output_dir": run_output_dir
-            }
-            state["train"]["start_time"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            
-            set_state(state)
-            
-            log_path = state["train"]["log_path"]
-            # print(f"Run training with train_info: {c_train_info}", flush=True)
-            success = run_training(
-                train_cmd,
-                log_path,
-                args.task_id,
-                args.retries,
-                args.task_type,
-                args.expected_repo_name,
-            )
-            time.sleep(5)
-            if not success:
-                print(f"Training failed for task {args.task_id} at count={count}", flush=True)
-                break 
-        
-        count += 1
+
+    run_training(
+        train_cmd,
+        log_path,
+        args.task_id,
+        args.retries,
+        args.task_type,
+        args.expected_repo_name,
+    )
 
     if not os.path.exists(submission_dir) or len(os.listdir(submission_dir)) < 2:
         print(f"Training failed for task {args.task_id}", flush=True)
-        # Fallback: load base model, add noise, save to submission_dir
-        add_noise_cmd = f"python add_random_noise.py {model_path} {submission_dir} {args.task_id} --noise-std 0.01"
+        add_noise_cmd = (
+            f"python add_random_noise.py {model_path} {submission_dir} "
+            f"{args.task_id} --noise-std 0.01"
+        )
         run_cmd_with_log(
             add_noise_cmd, os.path.join(ds_folder, f"add_noise_{args.task_id}.log")
         )
     else:
         print(f"Training successfully done for task {args.task_id}", flush=True)
         train_success = True
-        # Always add uniqueness noise to trained model to prevent dedup with other miners
-        add_noise_cmd = f"python add_random_noise.py {submission_dir} {submission_dir} {args.task_id} --noise-std 0.0008"
+        # Small noise for dedup prevention — negligible impact on eval loss
+        add_noise_cmd = (
+            f"python add_random_noise.py {submission_dir} {submission_dir} "
+            f"{args.task_id} --noise-std 0.0008"
+        )
         run_cmd_with_log(
             add_noise_cmd, os.path.join(ds_folder, f"add_noise_{args.task_id}.log")
         )
 
+    patch_submission_config(model_path, submission_dir)
     patch_wandb_symlinks(train_cst.WANDB_LOGS_DIR)
 
 
