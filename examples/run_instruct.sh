@@ -34,7 +34,7 @@ HF_REPO="${HF_REPO:-}"
 HOURS="${HOURS:-0.25}"         # 15 menit — cukup untuk end_time handler terpicu
 REPO_NAME="instruct-test-output"
 IMAGE_NAME="agultext:latest"
-CACHE_DIR="/ephemeral/agultext_cache"
+CACHE_DIR="${CACHE_DIR:-/ephemeral/agultext_cache}"
 
 echo "╔══════════════════════════════════════════════════════╗"
 echo "  AgulText — InstructText Training Test"
@@ -45,7 +45,7 @@ echo "╚═══════════════════════�
 echo ""
 
 # ── Direktori cache ────────────────────────────────────────────────────────
-mkdir -p "$CACHE_DIR/models" "$CACHE_DIR/datasets" "$CACHE_DIR/wandb_logs"
+mkdir -p "$CACHE_DIR/models" "$CACHE_DIR/datasets"
 mkdir -p "$CACHE_DIR/checkpoints"
 
 # ── Buat dataset test ──────────────────────────────────────────────────────
@@ -140,9 +140,6 @@ docker run --rm \
         # Download model menggunakan script resmi G.O.D
         cd /workspace/scripts
         python download_model_only.py "$MODEL"
-
-        mkdir -p /workspace/input_data
-        cp "/cache/datasets/${TASK_ID}_train_data.json" /workspace/input_data/
 
         # Jalankan training — output ke stdout (ditangkap oleh tee di host)
         python text_trainer.py \

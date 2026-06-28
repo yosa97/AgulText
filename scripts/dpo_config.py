@@ -1,6 +1,6 @@
 from model_utility import get_model_architecture, get_model_num_params, get_use_liger, disable_flash_attention, get_gradient_checkpointing, get_gpu_count
 from copy import deepcopy
-from lrs_lookup import get_dpo_lr
+from lr_estimator import estimate_lr as _estimate_lr
 
 DPO_CONFIG = {
     "0_1_b": {
@@ -229,12 +229,23 @@ def get_training_json(train_info: dict) -> dict:
         run_config["gradient_accumulation_steps"] = min(4, int(64 / total_batch_size))
     
     if train_info["find_lk_lr"]:
-        # get lr from lrs_lookup.py
-        lr = get_dpo_lr(model_name)
-        if lr is not None:
-            print(f"Using lr from lk: {lr}", flush=True)
-            run_config["learning_rate"] = lr
-    
+        hours = train_info.get("hours_to_complete", 1.0)
+        effective_bs = (
+            run_config["batch_size"]
+            * run_config["gradient_accumulation_steps"]
+            * run_config["gpu_nums"]
+        )
+        computed_lr = _estimate_lr(
+            model_path=model_path,
+            model_name=model_name,
+            task_type="DpoTask",
+            param_count=param_nums,
+            effective_batch_size=effective_bs,
+            hours_to_complete=hours,
+            fallback_lr=run_config["learning_rate"],
+        )
+        run_config["learning_rate"] = computed_lr
+
     run_config["learning_rate"] *= train_info["reg_ratio"]
     run_cmd = get_run_cmd(run_config, run_config["gpu_nums"])
     if run_config["disable_fa"] == "False":
