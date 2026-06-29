@@ -38,13 +38,15 @@ mkdir -p "$CACHE_DIR/checkpoints"
 
 DATASET_PATH="$CACHE_DIR/datasets/${TASK_ID}_train_data.json"
 
-echo ">>> Mengunduh dataset DPO dari Stanford Alpaca (~2000 preference pairs)..."
+echo ">>> Mengunduh dataset DPO dari Stanford Alpaca (~500 preference pairs panjang)..."
 python3 << PYEOF
 import json, urllib.request, sys
 
 URL = "https://raw.githubusercontent.com/tatsu-lab/stanford_alpaca/main/alpaca_data.json"
 DATASET_PATH = "$DATASET_PATH"
-N_TARGET = 2000
+N_TARGET = 500
+# Filter output >= 500 karakter agar chosen response punya konten substansial
+MIN_OUT_CHARS = 500
 
 # Rejected responses: sengaja vague/tidak membantu untuk sinyal DPO yang jelas
 BAD_RESPONSES = [
@@ -70,7 +72,7 @@ try:
         instr = item.get("instruction", "").strip()
         inp   = item.get("input", "").strip()
         out   = item.get("output", "").strip()
-        if not instr or not out or len(out) < 30:
+        if not instr or not out or len(out) < MIN_OUT_CHARS:
             continue
         prompt   = f"{instr}\n\n{inp}" if inp else instr
         rejected = BAD_RESPONSES[i % len(BAD_RESPONSES)]

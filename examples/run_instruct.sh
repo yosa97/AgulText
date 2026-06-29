@@ -31,7 +31,7 @@ TASK_ID="test_instruct_$(date +%s)"
 MODEL="${MODEL:-Qwen/Qwen2.5-0.5B-Instruct}"
 HF_TOKEN="${HF_TOKEN:-}"
 HF_REPO="${HF_REPO:-}"
-HOURS="${HOURS:-0.5}"          # 30 menit — simulasi tournament dengan data panjang (batas ~512 token)
+HOURS="${HOURS:-1.0}"          # 60 menit — cukup untuk tokenisasi axolotl + training (~5 mnt tokenisasi + 52 mnt training)
 REPO_NAME="instruct-test-output"
 IMAGE_NAME="agultext:latest"
 CACHE_DIR="${CACHE_DIR:-/ephemeral/agultext_cache}"
@@ -54,13 +54,16 @@ mkdir -p "$CACHE_DIR/checkpoints"
 # Fallback ke dataset inline 20 entries jika tidak ada koneksi internet.
 DATASET_PATH="$CACHE_DIR/datasets/${TASK_ID}_train_data.json"
 
-echo ">>> Mengunduh dataset Stanford Alpaca (~2000 entries unik)..."
+echo ">>> Mengunduh dataset Stanford Alpaca (~500 entries panjang, mirip data tournament)..."
 python3 << PYEOF
 import json, urllib.request, sys
 
 URL = "https://raw.githubusercontent.com/tatsu-lab/stanford_alpaca/main/alpaca_data.json"
 DATASET_PATH = "$DATASET_PATH"
-N_TARGET = 2000
+N_TARGET = 500
+# Filter output >= 800 karakter (~200 token) agar mirip data tournament
+# (tournament data rata-rata ~419 token per sample)
+MIN_OUT_CHARS = 800
 
 try:
     req = urllib.request.Request(URL, headers={"User-Agent": "python/3"})
@@ -72,7 +75,7 @@ try:
         instr = item.get("instruction", "").strip()
         inp   = item.get("input", "").strip()
         out   = item.get("output", "").strip()
-        if not out or len(out) < 20:
+        if not out or len(out) < MIN_OUT_CHARS:
             continue
         if inp:
             instr = f"{instr}\n\n{inp}"
@@ -82,7 +85,7 @@ try:
 
     with open(DATASET_PATH, "w", encoding="utf-8") as f:
         json.dump(samples, f, ensure_ascii=False)
-    print(f"Download berhasil: {len(samples)} samples unik dari Stanford Alpaca")
+    print(f"Download berhasil: {len(samples)} samples panjang dari Stanford Alpaca (output >= {MIN_OUT_CHARS} chars)")
     sys.exit(0)
 
 except Exception as e:
