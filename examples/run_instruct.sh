@@ -314,6 +314,18 @@ echo "File output:"
 echo "  Log lengkap   : $FULL_LOG"
 echo "  Log training  : $CACHE_DIR/internal_datasets/train_${TASK_ID}.log"
 echo "  Submission    : $SUBMIT_DIR"
+
+# Tampilkan eval loss dari loss.txt (ditulis trainer setelah evaluasi terbaik)
+LOSS_FILE="$SUBMIT_DIR/loss.txt"
+if [ -f "$LOSS_FILE" ]; then
+    LOSS_CONTENT=$(cat "$LOSS_FILE")
+    EVAL_STEP=$(echo "$LOSS_CONTENT" | cut -d',' -f1)
+    EVAL_LOSS=$(echo "$LOSS_CONTENT" | cut -d',' -f2)
+    echo "  Eval loss     : $EVAL_LOSS  (best checkpoint: step $EVAL_STEP)"
+    echo "  ↳ Makin rendah = makin bagus. Patokan InstructTask: <0.8 kompetitif"
+else
+    echo "  Eval loss     : tidak tersedia (loss.txt belum ditulis)"
+fi
 echo ""
 
 # Tampilkan cuplikan LR Estimator dari log

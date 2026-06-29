@@ -143,10 +143,35 @@ print(\"Upload selesai: https://huggingface.co/$HF_REPO\")
         fi
     '
 
+SUBMIT_DIR="$CACHE_DIR/checkpoints/$TASK_ID/$REPO_NAME"
+DOCKER_EXIT=$?
+
 echo ""
-echo "✓ Training selesai → $CACHE_DIR/checkpoints/$TASK_ID/$REPO_NAME"
-if [ -n "$HF_REPO" ]; then
-    echo "✓ Model terupload → https://huggingface.co/$HF_REPO"
+echo "════════════════════════════════════════════════════════"
+echo "  Ringkasan GRPO Training"
+echo "════════════════════════════════════════════════════════"
+echo ""
+echo "File output:"
+echo "  Submission    : $SUBMIT_DIR"
+
+# Tampilkan eval loss dari loss.txt (ditulis trainer setelah evaluasi terbaik)
+LOSS_FILE="$SUBMIT_DIR/loss.txt"
+if [ -f "$LOSS_FILE" ]; then
+    LOSS_CONTENT=$(cat "$LOSS_FILE")
+    EVAL_STEP=$(echo "$LOSS_CONTENT" | cut -d',' -f1)
+    EVAL_LOSS=$(echo "$LOSS_CONTENT" | cut -d',' -f2)
+    echo "  Eval loss     : $EVAL_LOSS  (best checkpoint: step $EVAL_STEP)"
+    echo "  ↳ Untuk GRPO: nilai menunjukkan reward signal (lebih tinggi = lebih baik)"
 else
+    echo "  Eval loss     : tidak tersedia (loss.txt belum ditulis)"
+fi
+echo ""
+
+FILE_COUNT=$(ls "$SUBMIT_DIR" 2>/dev/null | wc -l || echo 0)
+if [ -n "$HF_REPO" ] && [ "$DOCKER_EXIT" -eq 0 ]; then
+    echo "✓ Training selesai → $SUBMIT_DIR"
+    echo "  (Periksa log di atas untuk status upload HF)"
+elif [ -z "$HF_REPO" ] && [ "$FILE_COUNT" -ge 2 ]; then
+    echo "✓ Training selesai → $SUBMIT_DIR"
     echo "TIP: Upload ke HF: HF_TOKEN=hf_xxx HF_REPO=yosa97/nama-repo bash examples/run_grpo.sh"
 fi
