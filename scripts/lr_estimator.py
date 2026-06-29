@@ -77,7 +77,9 @@ def _sample_weight_rms(model_path: str, n_target: int = 8) -> Optional[float]:
         from safetensors import safe_open  # type: ignore[import]
 
         for sf_path in sf_files:
-            with safe_open(sf_path, framework="numpy", device="cpu") as f:
+            # framework="pt" agar bfloat16 tensor terbaca sebagai PyTorch tensor
+            # (numpy tidak mengenal bfloat16, sehingga framework="numpy" error)
+            with safe_open(sf_path, framework="pt", device="cpu") as f:
                 all_keys = list(f.keys())
                 proj_keys = [k for k in all_keys
                              if any(k.endswith(s) for s in _PROJ_SUFFIXES)]
@@ -85,7 +87,7 @@ def _sample_weight_rms(model_path: str, n_target: int = 8) -> Optional[float]:
                     continue
                 stride = max(1, len(proj_keys) // n_target)
                 for key in proj_keys[::stride][:n_target]:
-                    t = f.get_tensor(key).astype(np.float32)
+                    t = f.get_tensor(key).float().numpy()   # bfloat16→float32 via torch
                     rms = float(np.sqrt(np.mean(t ** 2)))
                     if rms > 1e-9:
                         rms_values.append(rms)

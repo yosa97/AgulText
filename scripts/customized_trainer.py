@@ -58,6 +58,7 @@ class CustomEvalSaveCallback(TrainerCallback):
         self.max_steps = max_steps
         self.has_checkpoint = False
         self.save_only = False
+        self._end_time_fired = False   # set True when end_time trigger fires
         self.checking_step = checking_step
         self.total_steps_all_epochs = total_steps_all_epochs
         self.checking_mode = checking_mode
@@ -186,6 +187,8 @@ class CustomEvalSaveCallback(TrainerCallback):
             control.should_evaluate = True
             control.should_save = True
             if when_to_eval["reason"] == "end_time":
+                control.should_training_stop = True   # stop after save completes
+                self._end_time_fired = True
                 if not self.has_checkpoint: # if there is no checkpoint, we just save the model, do not evaluate
                     print(f"No checkpoint found, just save the model at step: {state.global_step}", flush=True)
                     control.should_evaluate = False
@@ -267,6 +270,29 @@ class CustomEvalSaveCallback(TrainerCallback):
             # add a loss.txt file to the submission directory
             with open(os.path.join(self.submission_dir, "loss.txt"), "w") as f:
                 f.write(f"{self.best_checkpoint_info['step']},{best_eval_loss}")
+
+        # end_time fallback: jika end_time sudah fire tapi submission_dir masih kosong
+        # (misal eval_loss=None atau update_best_checkpoint tidak pernah True),
+        # paksa simpan checkpoint saat ini agar miner selalu punya submission.
+        if self._end_time_fired and is_main_process(LOCAL_RANK):
+            self._end_time_fired = False
+            sub_empty = (
+                not os.path.exists(self.submission_dir)
+                or len(os.listdir(self.submission_dir)) < 2
+            )
+            if sub_empty:
+                current_step = state.global_step
+                checkpoint_path = os.path.join(self.output_dir, f"checkpoint-{current_step}")
+                print(
+                    f"[end_time fallback] submission_dir kosong, menyimpan checkpoint-{current_step}",
+                    flush=True,
+                )
+                if os.path.exists(checkpoint_path):
+                    if os.path.exists(self.submission_dir):
+                        shutil.rmtree(self.submission_dir)
+                    shutil.copytree(checkpoint_path, self.submission_dir)
+                    with open(os.path.join(self.submission_dir, "loss.txt"), "w") as f:
+                        f.write(f"{current_step},end_time_fallback")
 
 
 class GRPOCustomEvalSaveCallback(CustomEvalSaveCallback):

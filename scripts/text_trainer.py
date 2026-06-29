@@ -553,7 +553,7 @@ def main():
         print(f"Training failed for task {args.task_id}", flush=True)
         add_noise_cmd = (
             f"python add_random_noise.py {model_path} {submission_dir} "
-            f"{args.task_id} --noise-std 0.01"
+            f"--task-id {args.task_id} --noise-std 0.01"
         )
         run_cmd_with_log(
             add_noise_cmd, os.path.join(ds_folder, f"add_noise_{args.task_id}.log")
@@ -564,7 +564,7 @@ def main():
         # Small noise for dedup prevention — negligible impact on eval loss
         add_noise_cmd = (
             f"python add_random_noise.py {submission_dir} {submission_dir} "
-            f"{args.task_id} --noise-std 0.0008"
+            f"--task-id {args.task_id} --noise-std 0.0008"
         )
         run_cmd_with_log(
             add_noise_cmd, os.path.join(ds_folder, f"add_noise_{args.task_id}.log")

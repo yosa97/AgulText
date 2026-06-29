@@ -168,6 +168,7 @@ def get_run_cmd(config: dict, gpu_nums: int):
     --eval_accumulation_steps 1 \
     --eval_strategy no \
     --save_strategy epoch \
+    --save_total_limit 2 \
     --logging_steps 5 \
     --learning_rate {learning_rate} \
     --weight_decay 0. \
@@ -213,7 +214,12 @@ def get_training_json(train_info: dict) -> dict:
     # downside when the time budget allows them.
     # Formula: epoch_num scales with hours so longer tasks do more epochs.
     hours = float(train_info.get("hours_to_complete", 1.0))
-    epoch_num = max(3, min(8, round(hours * 4)))
+    # epoch_num dibuat sangat besar agar training tidak selesai secara alami
+    # sebelum end_time. WhenToEvalHandler (customized_trainer.py) yang akan
+    # menghentikan training 3 menit sebelum end_time dan menyimpan checkpoint.
+    # Untuk dataset besar di tournament nyata, end_time selalu lebih dulu
+    # tercapai sebelum 999 epoch selesai, jadi nilai ini aman.
+    epoch_num = 999
 
     run_config = {
         "epoch_num": epoch_num,
