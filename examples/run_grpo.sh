@@ -37,6 +37,8 @@ mkdir -p "$CACHE_DIR/models" "$CACHE_DIR/datasets" "$CACHE_DIR/wandb_logs"
 mkdir -p "$CACHE_DIR/checkpoints"
 
 DATASET_PATH="$CACHE_DIR/datasets/${TASK_ID}_train_data.json"
+# 80 math/reasoning prompts unik — tanpa repetisi.
+# Reward function mendeteksi angka di output, jadi cukup gunakan soal numerik beragam.
 cat > "$DATASET_PATH" << 'EOF'
 [
   {"prompt": "Berapa 15 dikali 7? Jawab dengan angka saja."},
@@ -53,19 +55,73 @@ cat > "$DATASET_PATH" << 'EOF'
   {"prompt": "Berapa 200 dikurangi 75? Jawab dengan angka saja."},
   {"prompt": "Berapa 3 pangkat 3? Jawab dengan angka saja."},
   {"prompt": "Berapa 360 dibagi 9? Jawab dengan angka saja."},
-  {"prompt": "Berapa 17 ditambah 44? Jawab dengan angka saja."}
+  {"prompt": "Berapa 17 ditambah 44? Jawab dengan angka saja."},
+  {"prompt": "Berapa 5 pangkat 4? Jawab dengan angka saja."},
+  {"prompt": "Berapa 256 dibagi 16? Jawab dengan angka saja."},
+  {"prompt": "Berapa 99 dikurangi 43? Jawab dengan angka saja."},
+  {"prompt": "Berapa 11 dikali 11? Jawab dengan angka saja."},
+  {"prompt": "Berapa 450 ditambah 275? Jawab dengan angka saja."},
+  {"prompt": "Berapa akar kuadrat dari 144? Jawab dengan angka saja."},
+  {"prompt": "Berapa akar kuadrat dari 225? Jawab dengan angka saja."},
+  {"prompt": "Berapa akar kuadrat dari 64? Jawab dengan angka saja."},
+  {"prompt": "Berapa akar kuadrat dari 400? Jawab dengan angka saja."},
+  {"prompt": "Berapa 2 pangkat 10? Jawab dengan angka saja."},
+  {"prompt": "Jika ada 5 lusin pensil, berapa total pensilnya? Jawab dengan angka saja."},
+  {"prompt": "Jika harga buku Rp 15.000 dan diskon 20%, berapa harga setelah diskon? Jawab dengan angka saja."},
+  {"prompt": "Sebuah persegi panjang panjangnya 12 cm dan lebarnya 8 cm. Berapa luasnya dalam cm persegi? Jawab dengan angka saja."},
+  {"prompt": "Jika kereta berjalan 80 km/jam selama 3 jam, berapa jarak yang ditempuh? Jawab dengan angka saja."},
+  {"prompt": "Toko menjual 150 barang per hari. Berapa barang terjual dalam 2 minggu? Jawab dengan angka saja."},
+  {"prompt": "Berapa 15% dari 200? Jawab dengan angka saja."},
+  {"prompt": "Berapa 25% dari 480? Jawab dengan angka saja."},
+  {"prompt": "Berapa 10% dari 750? Jawab dengan angka saja."},
+  {"prompt": "Berapa 30% dari 90? Jawab dengan angka saja."},
+  {"prompt": "Berapa 50% dari 346? Jawab dengan angka saja."},
+  {"prompt": "Jika ada 3 kotak berisi 24 apel, berapa total apel? Jawab dengan angka saja."},
+  {"prompt": "Sebuah segitiga memiliki alas 10 cm dan tinggi 6 cm. Berapa luasnya? Jawab dengan angka saja."},
+  {"prompt": "Berapa keliling persegi dengan sisi 7 cm? Jawab dengan angka saja."},
+  {"prompt": "Jika 1 kg beras harganya Rp 12.000, berapa harga 5 kg? Jawab dengan angka saja."},
+  {"prompt": "Berapa menit dalam 4 jam? Jawab dengan angka saja."},
+  {"prompt": "Berapa detik dalam 1 jam? Jawab dengan angka saja."},
+  {"prompt": "Berapa cm dalam 3 meter? Jawab dengan angka saja."},
+  {"prompt": "Berapa mm dalam 5 cm? Jawab dengan angka saja."},
+  {"prompt": "Jika suhu 20 derajat Celsius, berapa Fahrenheitnya? (F = C x 1.8 + 32). Jawab dengan angka saja."},
+  {"prompt": "Berapa 72 dibagi 8 dikali 3? Jawab dengan angka saja."},
+  {"prompt": "Berapa (15 + 25) dikali 2? Jawab dengan angka saja."},
+  {"prompt": "Berapa 100 dikurangi 37 ditambah 12? Jawab dengan angka saja."},
+  {"prompt": "Berapa (8 pangkat 2) dikurangi (6 pangkat 2)? Jawab dengan angka saja."},
+  {"prompt": "Berapa bilangan prima ke-10? Jawab dengan angka saja."},
+  {"prompt": "Berapa FPB dari 24 dan 36? Jawab dengan angka saja."},
+  {"prompt": "Berapa KPK dari 4 dan 6? Jawab dengan angka saja."},
+  {"prompt": "Berapa KPK dari 3, 4, dan 6? Jawab dengan angka saja."},
+  {"prompt": "Jika sebuah lingkaran berjari-jari 7 cm, berapa kelilingnya? (pi = 22/7). Jawab dengan angka saja."},
+  {"prompt": "Jika sebuah lingkaran berjari-jari 14 cm, berapa luasnya? (pi = 22/7). Jawab dengan angka saja."},
+  {"prompt": "Berapa hasil dari 1000 dikurangi 1? Jawab dengan angka saja."},
+  {"prompt": "Berapa 17 dikali 17? Jawab dengan angka saja."},
+  {"prompt": "Berapa 999 ditambah 1? Jawab dengan angka saja."},
+  {"prompt": "Berapa 500 dibagi 4? Jawab dengan angka saja."},
+  {"prompt": "Sebuah persegi memiliki luas 81 cm persegi. Berapa panjang sisinya? Jawab dengan angka saja."},
+  {"prompt": "Jika sebuah kotak memiliki panjang 5, lebar 4, dan tinggi 3, berapa volumenya? Jawab dengan angka saja."},
+  {"prompt": "Berapa pangkat 2 dari 15? Jawab dengan angka saja."},
+  {"prompt": "Berapa 1000 dibagi 25? Jawab dengan angka saja."},
+  {"prompt": "Berapa 4 pangkat 5? Jawab dengan angka saja."},
+  {"prompt": "Jika seorang berlari 5 km per hari selama seminggu, berapa total km? Jawab dengan angka saja."},
+  {"prompt": "Berapa sisa dari 100 dibagi 7? Jawab dengan angka saja."},
+  {"prompt": "Berapa sisa dari 50 dibagi 3? Jawab dengan angka saja."},
+  {"prompt": "Berapa 123 ditambah 456 ditambah 789? Jawab dengan angka saja."},
+  {"prompt": "Berapa 2000 dikurangi 1337? Jawab dengan angka saja."},
+  {"prompt": "Jika harga TV Rp 5.000.000 dan PPN 11%, berapa total harga? Jawab dengan angka saja."},
+  {"prompt": "Berapa 3/4 dari 200? Jawab dengan angka saja."},
+  {"prompt": "Berapa 2/5 dari 150? Jawab dengan angka saja."},
+  {"prompt": "Sebuah mobil mengisi 40 liter bensin dengan harga Rp 10.000/liter. Berapa total bayar? Jawab dengan angka saja."},
+  {"prompt": "Berapa 19 dikali 19? Jawab dengan angka saja."},
+  {"prompt": "Jika ada 7 baris kursi dengan 12 kursi per baris, berapa total kursi? Jawab dengan angka saja."},
+  {"prompt": "Berapa 512 dibagi 8? Jawab dengan angka saja."},
+  {"prompt": "Berapa 6 pangkat 3? Jawab dengan angka saja."},
+  {"prompt": "Berapa hasil dari (100 dikali 5) ditambah (200 dikali 3)? Jawab dengan angka saja."}
 ]
 EOF
-
-python3 -c "
-import json
-with open('$DATASET_PATH') as f:
-    data = json.load(f)
-expanded = (data * 17)[:250]
-with open('$DATASET_PATH', 'w') as f:
-    json.dump(expanded, f, ensure_ascii=False)
-print(f'Dataset diperluas ke {len(expanded)} samples')
-"
+DATASET_N=$(python3 -c "import json; d=json.load(open('$DATASET_PATH')); print(len(d))")
+echo ">>> Dataset siap: $DATASET_N entries unik (tidak ada repetisi)"
 
 # Reward function: beri nilai 1.0 jika jawaban mengandung angka
 DATASET_TYPE='{"field_prompt":"prompt","reward_functions":[{"reward_func":"def reward_func(completions, **kwargs):\n    import re\n    return [1.0 if re.search(r\"\\\\d+\", c) else 0.0 for c in completions]","reward_weight":1.0,"func_hash":"test_grpo_hash","is_generic":false}]}'

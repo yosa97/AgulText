@@ -49,8 +49,52 @@ mkdir -p "$CACHE_DIR/models" "$CACHE_DIR/datasets"
 mkdir -p "$CACHE_DIR/checkpoints"
 
 # ── Buat dataset test ──────────────────────────────────────────────────────
+# Download Stanford Alpaca (52K instruksi nyata) untuk simulasi tournament realistis.
+# Tidak ada repetisi — eval_loss mencerminkan kemampuan generalisasi, bukan memorisasi.
+# Fallback ke dataset inline 20 entries jika tidak ada koneksi internet.
 DATASET_PATH="$CACHE_DIR/datasets/${TASK_ID}_train_data.json"
-cat > "$DATASET_PATH" << 'EOF'
+
+echo ">>> Mengunduh dataset Stanford Alpaca (~2000 entries unik)..."
+python3 << PYEOF
+import json, urllib.request, sys
+
+URL = "https://raw.githubusercontent.com/tatsu-lab/stanford_alpaca/main/alpaca_data.json"
+DATASET_PATH = "$DATASET_PATH"
+N_TARGET = 2000
+
+try:
+    req = urllib.request.Request(URL, headers={"User-Agent": "python/3"})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        raw = json.loads(r.read().decode("utf-8"))
+
+    samples = []
+    for item in raw:
+        instr = item.get("instruction", "").strip()
+        inp   = item.get("input", "").strip()
+        out   = item.get("output", "").strip()
+        if not out or len(out) < 20:
+            continue
+        if inp:
+            instr = f"{instr}\n\n{inp}"
+        samples.append({"instruction": instr, "output": out})
+        if len(samples) >= N_TARGET:
+            break
+
+    with open(DATASET_PATH, "w", encoding="utf-8") as f:
+        json.dump(samples, f, ensure_ascii=False)
+    print(f"Download berhasil: {len(samples)} samples unik dari Stanford Alpaca")
+    sys.exit(0)
+
+except Exception as e:
+    print(f"Download gagal: {e}", file=sys.stderr)
+    sys.exit(1)
+PYEOF
+DOWNLOAD_ALPACA=$?
+
+if [ $DOWNLOAD_ALPACA -ne 0 ]; then
+    echo ">>> PERINGATAN: Download gagal. Menggunakan dataset inline (20 entries, tanpa repetisi)."
+    echo ">>> Eval loss mungkin tidak realistis karena dataset terlalu kecil."
+    cat > "$DATASET_PATH" << 'EOF'
 [
   {
     "instruction": "Jelaskan secara mendalam bagaimana arsitektur Transformer bekerja dalam deep learning.",
@@ -134,16 +178,10 @@ cat > "$DATASET_PATH" << 'EOF'
   }
 ]
 EOF
+fi
 
-python3 -c "
-import json
-with open('$DATASET_PATH') as f:
-    data = json.load(f)
-expanded = (data * 20)[:300]
-with open('$DATASET_PATH', 'w') as f:
-    json.dump(expanded, f, ensure_ascii=False)
-print(f'Dataset diperluas ke {len(expanded)} samples')
-"
+DATASET_N=$(python3 -c "import json; d=json.load(open('$DATASET_PATH')); print(len(d))")
+echo ">>> Dataset siap: $DATASET_N entries unik (tidak ada repetisi)"
 
 DATASET_TYPE='{"field_instruction":"instruction","field_output":"output","no_input_format":"{instruction}","format":"{instruction}"}'
 

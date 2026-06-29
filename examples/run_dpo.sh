@@ -37,7 +37,61 @@ mkdir -p "$CACHE_DIR/models" "$CACHE_DIR/datasets" "$CACHE_DIR/wandb_logs"
 mkdir -p "$CACHE_DIR/checkpoints"
 
 DATASET_PATH="$CACHE_DIR/datasets/${TASK_ID}_train_data.json"
-cat > "$DATASET_PATH" << 'EOF'
+
+echo ">>> Mengunduh dataset DPO dari Stanford Alpaca (~2000 preference pairs)..."
+python3 << PYEOF
+import json, urllib.request, sys
+
+URL = "https://raw.githubusercontent.com/tatsu-lab/stanford_alpaca/main/alpaca_data.json"
+DATASET_PATH = "$DATASET_PATH"
+N_TARGET = 2000
+
+# Rejected responses: sengaja vague/tidak membantu untuk sinyal DPO yang jelas
+BAD_RESPONSES = [
+    "Saya tidak yakin dengan hal itu.",
+    "Ini terlalu kompleks untuk dijelaskan singkat.",
+    "Coba cari informasinya di internet.",
+    "Saya tidak memiliki informasi yang cukup.",
+    "Jawabannya tergantung situasi masing-masing.",
+    "Tidak bisa memberikan jawaban yang pasti.",
+    "Pertanyaan ini sebaiknya ditanyakan ke ahlinya.",
+    "Saya kurang memahami topik ini.",
+    "Susah dijelaskan dalam kata-kata sederhana.",
+    "Mungkin ada, mungkin tidak, tergantung kasusnya.",
+]
+
+try:
+    req = urllib.request.Request(URL, headers={"User-Agent": "python/3"})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        raw = json.loads(r.read().decode("utf-8"))
+
+    samples = []
+    for i, item in enumerate(raw):
+        instr = item.get("instruction", "").strip()
+        inp   = item.get("input", "").strip()
+        out   = item.get("output", "").strip()
+        if not instr or not out or len(out) < 30:
+            continue
+        prompt   = f"{instr}\n\n{inp}" if inp else instr
+        rejected = BAD_RESPONSES[i % len(BAD_RESPONSES)]
+        samples.append({"prompt": prompt, "chosen": out, "rejected": rejected})
+        if len(samples) >= N_TARGET:
+            break
+
+    with open(DATASET_PATH, "w", encoding="utf-8") as f:
+        json.dump(samples, f, ensure_ascii=False)
+    print(f"Download berhasil: {len(samples)} preference pairs dari Stanford Alpaca")
+    sys.exit(0)
+
+except Exception as e:
+    print(f"Download gagal: {e}", file=sys.stderr)
+    sys.exit(1)
+PYEOF
+DOWNLOAD_ALPACA=$?
+
+if [ $DOWNLOAD_ALPACA -ne 0 ]; then
+    echo ">>> PERINGATAN: Download gagal. Menggunakan dataset inline (15 entries, tanpa repetisi)."
+    cat > "$DATASET_PATH" << 'EOF'
 [
   {"prompt": "Apa ibu kota Indonesia?", "chosen": "Ibu kota Indonesia saat ini adalah Nusantara di Kalimantan Timur, menggantikan Jakarta.", "rejected": "Saya tidak tahu ibu kota Indonesia."},
   {"prompt": "Jelaskan machine learning.", "chosen": "Machine learning adalah cabang AI yang memungkinkan sistem belajar dari data secara otomatis.", "rejected": "Machine learning itu susah dipahami."},
@@ -56,16 +110,10 @@ cat > "$DATASET_PATH" << 'EOF'
   {"prompt": "Apa itu tokenizer?", "chosen": "Tokenizer mengubah teks mentah menjadi token yang dapat diproses model bahasa, misalnya kata atau sub-kata.", "rejected": "Tokenizer adalah program yang membaca file teks."}
 ]
 EOF
+fi
 
-python3 -c "
-import json
-with open('$DATASET_PATH') as f:
-    data = json.load(f)
-expanded = (data * 17)[:250]
-with open('$DATASET_PATH', 'w') as f:
-    json.dump(expanded, f, ensure_ascii=False)
-print(f'Dataset diperluas ke {len(expanded)} samples')
-"
+DATASET_N=$(python3 -c "import json; d=json.load(open('$DATASET_PATH')); print(len(d))")
+echo ">>> Dataset siap: $DATASET_N entries unik (tidak ada repetisi)"
 
 DATASET_TYPE='{"field_prompt":"prompt","field_chosen":"chosen","field_rejected":"rejected","prompt_format":"{prompt}","chosen_format":"{chosen}","rejected_format":"{rejected}"}'
 
