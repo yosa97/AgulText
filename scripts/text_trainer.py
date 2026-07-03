@@ -3,6 +3,8 @@
 Standalone script for text model training (InstructText, DPO, and GRPO)
 """
 
+import quiet_mode  # noqa: F401,E402 — log suppression gate; harus sebelum import berat
+
 import argparse
 import asyncio
 import json
@@ -358,6 +360,16 @@ def main():
     parser.add_argument(
         "--reg-ratio", type=float, help="Reg ratio to use for training", default=1.0
     )
+    parser.add_argument(
+        "--baseline-stats",
+        type=str,
+        default=None,
+        help=(
+            "Baseline statistics from model-prep, as a JSON string or path to a JSON file. "
+            "Contains training dynamics, weight statistics, and dataset distribution. "
+            "Used for adaptive max_length and principled LR estimation."
+        ),
+    )
 
     args = parser.parse_args()
     original_model_name = args.model
@@ -410,6 +422,27 @@ def main():
         )
         is_openai = True
 
+    # Parse baseline_stats — sent by validator as JSON string, file path, or env var.
+    # Graceful: if missing or malformed, baseline_stats stays None and all features
+    # that depend on it fall back to their built-in defaults (no crash).
+    baseline_stats = None
+    _bs_raw = (
+        args.baseline_stats
+        or os.environ.get("BASELINE_STATS_PATH")
+        or os.environ.get("BASELINE_STATS")
+    )
+    if _bs_raw:
+        try:
+            if os.path.isfile(_bs_raw):
+                with open(_bs_raw, "r") as _f:
+                    baseline_stats = json.load(_f)
+                print(f"[text_trainer] baseline_stats loaded from file: {_bs_raw}", flush=True)
+            else:
+                baseline_stats = json.loads(_bs_raw)
+                print(f"[text_trainer] baseline_stats loaded from JSON string (task_type={baseline_stats.get('task_type', 'unknown')})", flush=True)
+        except (json.JSONDecodeError, OSError, ValueError) as _e:
+            print(f"[text_trainer] WARNING: failed to parse --baseline-stats: {_e}. Continuing without it.", flush=True)
+
     # Read KL regularisation env vars sent by validator (~20% of instruct tasks).
     # USE_KL=1 means the scorer will add KL_COEF * KL(model || base) to eval loss,
     # so we must match that objective during training via KLRegularizedTrainer.
@@ -440,6 +473,7 @@ def main():
         "find_lk_lr": True,
         "checking_mode": "first_time",
         "kl_coef": _kl_coef,
+        "baseline_stats": baseline_stats,
     }
 
     if (

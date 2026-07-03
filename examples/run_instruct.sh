@@ -233,6 +233,7 @@ docker run --rm \
     -e REPO_NAME="$REPO_NAME" \
     -e HF_TOKEN="$HF_TOKEN" \
     -e HF_REPO="$HF_REPO" \
+    -e AGULTEXT_VERBOSE=1 \
     --entrypoint bash \
     "$IMAGE_NAME" \
     -c '

@@ -63,7 +63,50 @@ class CustomEvalSaveCallback(TrainerCallback):
         self.total_steps_all_epochs = total_steps_all_epochs
         self.checking_mode = checking_mode
         self.end_time = end_time
-        
+        # Adaptive eval timing: adjusted once after first eval completes
+        self._eval_timing_adjusted = False
+        # Cache original model config for architecture patching
+        self._original_config = None
+        _base_cfg_path = os.path.join(original_model_name, "config.json")
+        if os.path.exists(_base_cfg_path):
+            try:
+                with open(_base_cfg_path) as _f:
+                    self._original_config = json.load(_f)
+            except Exception:
+                pass
+
+    def _patch_submission_architectures(self):
+        """Patch architectures in submission config.json to match the base model.
+
+        Some transformers versions alias model classes on load (e.g. MistralForCausalLM
+        → LlamaForCausalLM). When save_pretrained writes config.json it uses the runtime
+        class, which may differ from the original. The validator's is_finetune check
+        compares architectures and silently fails on mismatch — submission is rejected
+        even though the model is technically fine. This restores the original value.
+        """
+        if not self._original_config:
+            return
+        cfg_path = os.path.join(self.submission_dir, "config.json")
+        if not os.path.exists(cfg_path):
+            return
+        orig_arch = self._original_config.get("architectures")
+        if not orig_arch:
+            return
+        try:
+            with open(cfg_path) as _f:
+                cfg = json.load(_f)
+            if cfg.get("architectures") != orig_arch:
+                print(
+                    f"[config-patch] architectures mismatch — "
+                    f"restoring {cfg.get('architectures')} → {orig_arch}",
+                    flush=True,
+                )
+                cfg["architectures"] = orig_arch
+                with open(cfg_path, "w") as _f:
+                    json.dump(cfg, _f, indent=2)
+        except Exception as _e:
+            print(f"[config-patch] WARNING: {_e}", flush=True)
+
     def compute_loss(self, state: TrainerState, metrics):
         return metrics.get("eval_loss", None)
 
@@ -181,8 +224,8 @@ class CustomEvalSaveCallback(TrainerCallback):
             
         when_to_eval = self.function_when_to_evaluate(state.global_step)
         if when_to_eval["eval"]:
-            # do not allow the pod to be stopped by any reason 
-                # first check if there is at least one checkpoint or not 
+            # do not allow the pod to be stopped by any reason
+                # first check if there is at least one checkpoint or not
             print(f"Evaluating the model at step: {state.global_step} the reason: {when_to_eval['reason']}", flush=True)
             control.should_evaluate = True
             control.should_save = True
@@ -193,6 +236,25 @@ class CustomEvalSaveCallback(TrainerCallback):
                     print(f"No checkpoint found, just save the model at step: {state.global_step}", flush=True)
                     control.should_evaluate = False
                     self.save_only = True
+
+        # Skip evals before the model has trained 75% of one epoch.
+        # Overfitting (and thus meaningful eval signal) is not possible yet.
+        # Exception: end_time trigger is one-shot and must never be skipped.
+        if (
+            control.should_evaluate
+            and when_to_eval["reason"] != "end_time"
+            and self.total_steps_all_epochs > 0
+            and args.num_train_epochs > 1
+        ):
+            steps_per_epoch = self.total_steps_all_epochs / max(1, args.num_train_epochs)
+            if state.global_step < int(0.75 * steps_per_epoch):
+                print(
+                    f"[eval-skip] step={state.global_step} < 0.75*epoch={int(0.75 * steps_per_epoch)}, skipping eval",
+                    flush=True,
+                )
+                control.should_evaluate = False
+                control.should_save = False
+
         return control
 
 
@@ -219,6 +281,37 @@ class CustomEvalSaveCallback(TrainerCallback):
                 print(f" At step: {state.global_step} The eval_loss: {eval_loss} is not smaller than the current best eval_loss: {self.best_checkpoint_info['loss']}, update_best_checkpoint={self.update_best_checkpoint}", flush=True)
             self.update_best_checkpoint = False  # Reset flag — jangan biarkan stale True dari eval sebelumnya
 
+        # Adaptive eval interval: setelah eval pertama selesai, ukur runtime-nya
+        # dan sesuaikan eval_steps agar eval tidak memakan lebih dari 10% sisa waktu.
+        # Hanya diperlebar (tidak dipersempit) untuk menjaga coverage minimum.
+        if (
+            not self._eval_timing_adjusted
+            and self.end_time
+            and self.total_steps_all_epochs > 0
+        ):
+            self._eval_timing_adjusted = True
+            eval_runtime = metrics.get("eval_runtime", 0)
+            if eval_runtime > 0:
+                try:
+                    _end_obj = datetime.datetime.strptime(self.end_time, "%Y-%m-%d %H:%M:%S")
+                    _remaining_s = max(0, (_end_obj - datetime.datetime.now()).total_seconds())
+                except (ValueError, TypeError):
+                    _remaining_s = 0
+                if _remaining_s > 0:
+                    _eval_budget_s = _remaining_s * 0.10
+                    _max_evals = max(3, int(_eval_budget_s / eval_runtime))
+                    _new_eval_steps = max(30, self.total_steps_all_epochs // _max_evals)
+                    if _new_eval_steps > getattr(args, "eval_steps", 0):
+                        print(
+                            f"[eval-timing] eval={eval_runtime:.1f}s, sisa={_remaining_s:.0f}s "
+                            f"→ eval_steps {getattr(args, 'eval_steps', '?')} → {_new_eval_steps}",
+                            flush=True,
+                        )
+                        args.eval_steps = _new_eval_steps
+                        args.save_steps = _new_eval_steps
+                    else:
+                        print(f"[eval-timing] eval cepat ({eval_runtime:.1f}s), interval tetap", flush=True)
+
 
     def on_save(self, args, state: TrainerState, control: TrainerControl, **kwargs):
         
@@ -242,14 +335,15 @@ class CustomEvalSaveCallback(TrainerCallback):
                 os.path.join(self.output_dir, f"checkpoint-{current_step}"),
                 self.submission_dir
             )
+            self._patch_submission_architectures()
             self.update_best_checkpoint = False
             # add a loss.txt file to the submission directory
             with open(os.path.join(self.submission_dir, "loss.txt"), "w") as f:
                 f.write(f"{current_step},no_eval")
-            
+
             # release the flag
             self.save_only = False
-            return 
+            return
             
         # Custom logic after model is saved
         # You can trigger external services, logs, or backups here
@@ -266,6 +360,7 @@ class CustomEvalSaveCallback(TrainerCallback):
                 os.path.join(self.output_dir, f"checkpoint-{self.best_checkpoint_info['step']}"),
                 self.submission_dir
             )
+            self._patch_submission_architectures()
             self.update_best_checkpoint = False
             # add a loss.txt file to the submission directory
             with open(os.path.join(self.submission_dir, "loss.txt"), "w") as f:
@@ -291,6 +386,7 @@ class CustomEvalSaveCallback(TrainerCallback):
                     if os.path.exists(self.submission_dir):
                         shutil.rmtree(self.submission_dir)
                     shutil.copytree(checkpoint_path, self.submission_dir)
+                    self._patch_submission_architectures()
                     with open(os.path.join(self.submission_dir, "loss.txt"), "w") as f:
                         f.write(f"{current_step},end_time_fallback")
 
