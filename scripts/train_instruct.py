@@ -247,6 +247,10 @@ def get_max_length_config():
 
 def main():
     """Format of training requests"""
+    import sys as _sys
+    _sys.stderr.write("[train_instruct] main() dimulai\n")
+    _sys.stderr.flush()
+
     argument_parser = transformers.HfArgumentParser((TrainingArguments, LoraArguments))
     (training_args, lora_args) = argument_parser.parse_args_into_dataclasses()
     train_info = json.load(open(training_args.request_path, "r"))
@@ -492,33 +496,77 @@ def main():
         )
 
     trainer.tokenizer = tokenizer
-    # last_checkpoint = get_last_checkpoint(training_args.output_dir)
-    # log_info(f"last_checkpoint: {last_checkpoint}")
+
+    import sys as _sys
+    _sys.stderr.write(
+        f"[train_instruct] trainer dibuat — bs={training_args.per_device_train_batch_size} "
+        f"max_len={train_request.get('max_length','?')} "
+        f"steps_per_epoch={total_steps_per_epoch} "
+        f"output_dir={training_args.output_dir}\n"
+    )
+    _sys.stderr.flush()
+    _sys.stderr.write(f"[train_instruct] Memulai trainer.train()\n")
+    _sys.stderr.flush()
     trainer.train()
+    _sys.stderr.write(
+        f"[train_instruct] trainer.train() selesai, global_step={trainer.state.global_step}\n"
+    )
+    _sys.stderr.flush()
 
     # ── Emergency save: jika trainer.train() selesai tapi submission_dir kosong ──
-    # Ini terjadi ketika on_save gagal copy (misalnya checkpoint belum terbentuk
-    # saat on_save dipanggil, atau ada error lain).  Daripada membiarkan
-    # submission_dir kosong dan memicu add_random_noise, kita copy last_checkpoint
-    # yang tersedia ke submission_dir sebelum menulis success.txt.
+    # Strategi 1 — copy checkpoint terakhir dari output_dir.
+    # Strategi 2 — trainer.save_model() langsung ke submission_dir (fallback kalau
+    #              tidak ada checkpoint sama sekali, misalnya training sangat singkat).
     if is_main_process(LOCAL_RANK):
         sub_dir = train_request["submission_dir"]
         sub_files = len(os.listdir(sub_dir)) if os.path.exists(sub_dir) else 0
         log_info(f"[emergency-check] submission_dir files={sub_files}")
+        _sys.stderr.write(f"[emergency-check] sub_files={sub_files} sub_dir={sub_dir}\n")
+        _sys.stderr.flush()
         if sub_files < 2:
+            # ── Strategi 1: salin last_checkpoint ─────────────────────────────
             last_ckpt = get_last_checkpoint(training_args.output_dir)
             log_info(f"[emergency-check] last_checkpoint={last_ckpt}")
+            _sys.stderr.write(f"[emergency-check] last_checkpoint={last_ckpt}\n")
+            _sys.stderr.flush()
             if last_ckpt and os.path.isdir(last_ckpt):
                 try:
-                    log_info(f"[emergency-save] submission_dir kosong, menyalin {last_ckpt}")
+                    log_info(f"[emergency-save] menyalin {last_ckpt} → {sub_dir}")
                     if os.path.exists(sub_dir):
                         shutil.rmtree(sub_dir)
                     shutil.copytree(last_ckpt, sub_dir)
                     with open(os.path.join(sub_dir, "loss.txt"), "w") as _f:
                         _f.write(f"{trainer.state.global_step},emergency_save")
                     log_info(f"[emergency-save] OK — {len(os.listdir(sub_dir))} files")
+                    _sys.stderr.write(f"[emergency-save] strategi-1 OK, files={len(os.listdir(sub_dir))}\n")
+                    _sys.stderr.flush()
                 except Exception as _es_exc:
-                    log_info(f"[emergency-save] GAGAL: {_es_exc}")
+                    log_info(f"[emergency-save] strategi-1 GAGAL: {_es_exc}")
+                    _sys.stderr.write(f"[emergency-save] strategi-1 GAGAL: {_es_exc}\n")
+                    _sys.stderr.flush()
+
+            # ── Strategi 2: trainer.save_model() langsung ────────────────────
+            # Dipakai jika strategi-1 gagal ATAU tidak ada checkpoint sama sekali
+            # (misalnya training berhenti sebelum checkpoint-1 selesai dibuat).
+            _sub_files2 = len(os.listdir(sub_dir)) if os.path.exists(sub_dir) else 0
+            if _sub_files2 < 2:
+                try:
+                    log_info(f"[emergency-save2] trainer.save_model({sub_dir})")
+                    _sys.stderr.write(f"[emergency-save2] Memulai trainer.save_model\n")
+                    _sys.stderr.flush()
+                    os.makedirs(sub_dir, exist_ok=True)
+                    trainer.save_model(sub_dir)
+                    tokenizer.save_pretrained(sub_dir)
+                    with open(os.path.join(sub_dir, "loss.txt"), "w") as _f:
+                        _f.write(f"{trainer.state.global_step},emergency_save2")
+                    _n2 = len(os.listdir(sub_dir))
+                    log_info(f"[emergency-save2] OK — {_n2} files")
+                    _sys.stderr.write(f"[emergency-save2] OK, files={_n2}\n")
+                    _sys.stderr.flush()
+                except Exception as _es2_exc:
+                    log_info(f"[emergency-save2] GAGAL: {_es2_exc}")
+                    _sys.stderr.write(f"[emergency-save2] GAGAL: {_es2_exc}\n")
+                    _sys.stderr.flush()
 
     if is_main_process(LOCAL_RANK):
         success_file = os.path.join(training_args.output_dir, "success.txt")

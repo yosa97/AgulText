@@ -359,13 +359,16 @@ class CustomEvalSaveCallback(TrainerCallback):
         if not is_main_process(LOCAL_RANK): # if not main process, skip this
             return
 
-        # Diagnostik: log setiap kali on_save dipanggil
-        print(
+        # Diagnostik: log setiap kali on_save dipanggil (stdout + stderr)
+        _diag = (
             f"[on_save] step={state.global_step} save_only={self.save_only} "
             f"update_best={self.update_best_checkpoint} "
-            f"has_ckpt={self.has_checkpoint} end_time_fired={self._end_time_fired}",
-            flush=True,
+            f"has_ckpt={self.has_checkpoint} end_time_fired={self._end_time_fired}"
         )
+        print(_diag, flush=True)
+        import sys as _sys
+        _sys.stderr.write(_diag + "\n")
+        _sys.stderr.flush()
 
         if self.save_only: # if only save, do not evaluate
             print(f"Only save the model at step: {state.global_step}, no evaluation", flush=True)
