@@ -301,10 +301,11 @@ class CustomEvalSaveCallback(TrainerCallback):
                     _eval_budget_s = _remaining_s * 0.10
                     _max_evals = max(3, int(_eval_budget_s / eval_runtime))
                     _new_eval_steps = max(30, self.total_steps_all_epochs // _max_evals)
-                    if _new_eval_steps > getattr(args, "eval_steps", 0):
+                    _cur_eval_steps = getattr(args, "eval_steps", None) or 0
+                    if _new_eval_steps > _cur_eval_steps:
                         print(
                             f"[eval-timing] eval={eval_runtime:.1f}s, sisa={_remaining_s:.0f}s "
-                            f"→ eval_steps {getattr(args, 'eval_steps', '?')} → {_new_eval_steps}",
+                            f"→ eval_steps {_cur_eval_steps} → {_new_eval_steps}",
                             flush=True,
                         )
                         args.eval_steps = _new_eval_steps
