@@ -208,6 +208,26 @@ def run_training(
                         print(f"VLLM OOM error, disable VLLM", flush=True)
                         train_cmd = replace_args_in_cmd(train_cmd, "use_vllm", "False")
 
+        # Bersihkan checkpoint lama di output_dir sebelum attempt baru.
+        # Checkpoint dari attempt sebelumnya (mungkin corrupt karena OOM) bisa
+        # menyebabkan HF Trainer crash saat mencoba resume — hapus dulu agar
+        # attempt baru mulai dari awal (model fresh, tanpa corrupt state).
+        if i > 0:
+            output_dir_for_cleanup = extract_value_from_cmd(train_cmd, "output_dir")
+            if output_dir_for_cleanup and os.path.isdir(output_dir_for_cleanup):
+                for _item in os.listdir(output_dir_for_cleanup):
+                    if _item.startswith("checkpoint-"):
+                        _ckpt_path = os.path.join(output_dir_for_cleanup, _item)
+                        try:
+                            shutil.rmtree(_ckpt_path)
+                            print(f"[retry-cleanup] removed {_item}", flush=True)
+                        except Exception as _ce:
+                            print(f"[retry-cleanup] could not remove {_item}: {_ce}", flush=True)
+                # Hapus juga success.txt lama (dari attempt sebelumnya jika ada)
+                _old_success = os.path.join(output_dir_for_cleanup, "success.txt")
+                if os.path.exists(_old_success):
+                    os.remove(_old_success)
+
         # empty the log file if it exists
         if os.path.exists(log_path):
             with open(log_path, "w") as f:

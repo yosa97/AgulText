@@ -313,38 +313,76 @@ class CustomEvalSaveCallback(TrainerCallback):
                         print(f"[eval-timing] eval cepat ({eval_runtime:.1f}s), interval tetap", flush=True)
 
 
+    def _safe_copy_checkpoint(self, src_path: str, dst_path: str, step: int) -> bool:
+        """Copy checkpoint src_path → dst_path dengan error handling lengkap.
+
+        Menghindari skenario fatal: rmtree berhasil tapi copytree gagal → dst hilang.
+        Menggunakan dirs_exist_ok=True sebagai fallback agar dst tidak perlu dihapus dulu.
+
+        Returns True jika berhasil, False jika gagal.
+        """
+        if not os.path.exists(src_path):
+            print(
+                f"[on_save] WARNING: checkpoint-{step} tidak ditemukan di {src_path}",
+                flush=True,
+            )
+            return False
+
+        # Path 1: rmtree + copytree (clean copy — paling aman, hasilnya identik dengan src)
+        try:
+            if os.path.exists(dst_path):
+                shutil.rmtree(dst_path)
+            shutil.copytree(src_path, dst_path)
+            print(f"[on_save] checkpoint-{step} → submission_dir OK", flush=True)
+            return True
+        except Exception as _e1:
+            print(f"[on_save] copytree gagal (step={step}): {_e1}", flush=True)
+
+        # Path 2: dirs_exist_ok fallback (Python 3.8+) — tidak perlu rmtree
+        try:
+            os.makedirs(dst_path, exist_ok=True)
+            shutil.copytree(src_path, dst_path, dirs_exist_ok=True)
+            print(f"[on_save] checkpoint-{step} → submission_dir OK (dirs_exist_ok)", flush=True)
+            return True
+        except Exception as _e2:
+            print(f"[on_save] dirs_exist_ok fallback juga gagal (step={step}): {_e2}", flush=True)
+            return False
+
     def on_save(self, args, state: TrainerState, control: TrainerControl, **kwargs):
-        
+
         if state.global_step == self.max_steps and self.max_steps != -1:
             print(f"Stop training because of max steps: {self.max_steps}", flush=True)
             control.should_training_stop = True
-        
+
         self.has_checkpoint = True
-        
+
         if not is_main_process(LOCAL_RANK): # if not main process, skip this
-            return 
-            
-        if self.save_only: # if only save, do not evaluate 
+            return
+
+        # Diagnostik: log setiap kali on_save dipanggil
+        print(
+            f"[on_save] step={state.global_step} save_only={self.save_only} "
+            f"update_best={self.update_best_checkpoint} "
+            f"has_ckpt={self.has_checkpoint} end_time_fired={self._end_time_fired}",
+            flush=True,
+        )
+
+        if self.save_only: # if only save, do not evaluate
             print(f"Only save the model at step: {state.global_step}, no evaluation", flush=True)
             current_step = state.global_step
-            # Remove existing directory if it exists
-            if os.path.exists(self.submission_dir):
-                shutil.rmtree(self.submission_dir)
-                
-            shutil.copytree(
-                os.path.join(self.output_dir, f"checkpoint-{current_step}"),
-                self.submission_dir
-            )
-            self._patch_submission_architectures()
+            src = os.path.join(self.output_dir, f"checkpoint-{current_step}")
+            ok = self._safe_copy_checkpoint(src, self.submission_dir, current_step)
+            if ok:
+                self._patch_submission_architectures()
+                with open(os.path.join(self.submission_dir, "loss.txt"), "w") as f:
+                    f.write(f"{current_step},no_eval")
+            else:
+                print(f"[on_save] save_only GAGAL untuk step={current_step}", flush=True)
             self.update_best_checkpoint = False
-            # add a loss.txt file to the submission directory
-            with open(os.path.join(self.submission_dir, "loss.txt"), "w") as f:
-                f.write(f"{current_step},no_eval")
-
             # release the flag
             self.save_only = False
             return
-            
+
         # Custom logic after model is saved
         # You can trigger external services, logs, or backups here
         if (
@@ -352,19 +390,17 @@ class CustomEvalSaveCallback(TrainerCallback):
             and is_main_process(LOCAL_RANK)
         ):
             print(f"Copy the best checkpoint to the submission directory at step: {state.global_step}", flush=True)
-            # Remove existing directory if it exists
-            if os.path.exists(self.submission_dir):
-                shutil.rmtree(self.submission_dir)
+            best_step = self.best_checkpoint_info["step"]
             best_eval_loss = self.best_checkpoint_info["loss"]
-            shutil.copytree(
-                os.path.join(self.output_dir, f"checkpoint-{self.best_checkpoint_info['step']}"),
-                self.submission_dir
-            )
-            self._patch_submission_architectures()
+            src = os.path.join(self.output_dir, f"checkpoint-{best_step}")
+            ok = self._safe_copy_checkpoint(src, self.submission_dir, best_step)
+            if ok:
+                self._patch_submission_architectures()
+                with open(os.path.join(self.submission_dir, "loss.txt"), "w") as f:
+                    f.write(f"{best_step},{best_eval_loss}")
+            else:
+                print(f"[on_save] update_best GAGAL untuk step={best_step}", flush=True)
             self.update_best_checkpoint = False
-            # add a loss.txt file to the submission directory
-            with open(os.path.join(self.submission_dir, "loss.txt"), "w") as f:
-                f.write(f"{self.best_checkpoint_info['step']},{best_eval_loss}")
 
         # end_time fallback: jika end_time sudah fire tapi submission_dir masih kosong
         # (misal eval_loss=None atau update_best_checkpoint tidak pernah True),
@@ -382,13 +418,13 @@ class CustomEvalSaveCallback(TrainerCallback):
                     f"[end_time fallback] submission_dir kosong, menyimpan checkpoint-{current_step}",
                     flush=True,
                 )
-                if os.path.exists(checkpoint_path):
-                    if os.path.exists(self.submission_dir):
-                        shutil.rmtree(self.submission_dir)
-                    shutil.copytree(checkpoint_path, self.submission_dir)
+                ok = self._safe_copy_checkpoint(checkpoint_path, self.submission_dir, current_step)
+                if ok:
                     self._patch_submission_architectures()
                     with open(os.path.join(self.submission_dir, "loss.txt"), "w") as f:
                         f.write(f"{current_step},end_time_fallback")
+                else:
+                    print(f"[end_time fallback] GAGAL untuk step={current_step}", flush=True)
 
 
 class GRPOCustomEvalSaveCallback(CustomEvalSaveCallback):

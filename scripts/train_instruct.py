@@ -460,7 +460,7 @@ def main():
         ),
         train_request["submission_dir"],
         training_args.output_dir,
-        train_request["model_name"],
+        train_request["model_path"],   # local path untuk architecture patching config.json
         max_steps,
         checking_step=checking_step,
         total_steps_all_epochs=total_steps_all_epochs,
@@ -495,7 +495,31 @@ def main():
     # last_checkpoint = get_last_checkpoint(training_args.output_dir)
     # log_info(f"last_checkpoint: {last_checkpoint}")
     trainer.train()
-    
+
+    # ── Emergency save: jika trainer.train() selesai tapi submission_dir kosong ──
+    # Ini terjadi ketika on_save gagal copy (misalnya checkpoint belum terbentuk
+    # saat on_save dipanggil, atau ada error lain).  Daripada membiarkan
+    # submission_dir kosong dan memicu add_random_noise, kita copy last_checkpoint
+    # yang tersedia ke submission_dir sebelum menulis success.txt.
+    if is_main_process(LOCAL_RANK):
+        sub_dir = train_request["submission_dir"]
+        sub_files = len(os.listdir(sub_dir)) if os.path.exists(sub_dir) else 0
+        log_info(f"[emergency-check] submission_dir files={sub_files}")
+        if sub_files < 2:
+            last_ckpt = get_last_checkpoint(training_args.output_dir)
+            log_info(f"[emergency-check] last_checkpoint={last_ckpt}")
+            if last_ckpt and os.path.isdir(last_ckpt):
+                try:
+                    log_info(f"[emergency-save] submission_dir kosong, menyalin {last_ckpt}")
+                    if os.path.exists(sub_dir):
+                        shutil.rmtree(sub_dir)
+                    shutil.copytree(last_ckpt, sub_dir)
+                    with open(os.path.join(sub_dir, "loss.txt"), "w") as _f:
+                        _f.write(f"{trainer.state.global_step},emergency_save")
+                    log_info(f"[emergency-save] OK — {len(os.listdir(sub_dir))} files")
+                except Exception as _es_exc:
+                    log_info(f"[emergency-save] GAGAL: {_es_exc}")
+
     if is_main_process(LOCAL_RANK):
         success_file = os.path.join(training_args.output_dir, "success.txt")
         with open(success_file, "w") as f:
