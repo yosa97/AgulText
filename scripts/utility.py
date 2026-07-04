@@ -36,6 +36,15 @@ def log_info(message: str, event_name: str = "print"):
 
 
 def pad_sequence(sequence: list[int], pad_value: int, max_length: int, padding_side: str) -> list[int]:
+    # Truncate dulu jika sequence lebih panjang dari max_length.
+    # Tanpa ini, (max_length - len(sequence)) negatif → padding kosong →
+    # sequence tetap terlalu panjang → data collator crash saat membuat
+    # tensor rectangular: "expected sequence of length 512 at dim 1 (got 1083)"
+    if len(sequence) > max_length:
+        if padding_side == "left":
+            sequence = sequence[-max_length:]   # pertahankan ekor (konteks terbaru)
+        else:
+            sequence = sequence[:max_length]    # pertahankan kepala (instruksi)
     if padding_side == "left":
         return [pad_value] * (max_length - len(sequence)) + sequence
     else:
