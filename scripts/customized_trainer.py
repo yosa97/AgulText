@@ -309,6 +309,20 @@ class CustomEvalSaveCallback(TrainerCallback):
                         )
                         args.eval_steps = _new_eval_steps
                         args.save_steps = _new_eval_steps
+                        # eval_strategy=no → args.eval_steps diabaikan HF Trainer.
+                        # Update WhenToEvalHandler.steps_per_epoch supaya epoch-trigger
+                        # benar-benar melambat (tidak hanya args yang tidak terpakai).
+                        _handler = self.function_when_to_evaluate
+                        if (
+                            hasattr(_handler, "steps_per_epoch")
+                            and _new_eval_steps > _handler.steps_per_epoch
+                        ):
+                            _old_spe = _handler.steps_per_epoch
+                            _handler.steps_per_epoch = _new_eval_steps
+                            print(
+                                f"[eval-timing] handler.steps_per_epoch {_old_spe} → {_new_eval_steps}",
+                                flush=True,
+                            )
                     else:
                         print(f"[eval-timing] eval cepat ({eval_runtime:.1f}s), interval tetap", flush=True)
 
