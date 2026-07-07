@@ -57,8 +57,10 @@ INSTRUCT_CONFIG = {
         "lr": 3.5e-5,
         "distributed": "ddp",
         "gpu_count": 2,
-        # Full weight; OOM handled via adaptive max_length + batch_size + max_length fallback
-        "use_lora": False,
+        # LoRA diaktifkan untuk mencegah OOM pada GPU tournament (full fine-tuning
+        # 8-9B butuh ~40GB+ per GPU dengan DDP; LoRA mengurangi kebutuhan VRAM
+        # secara signifikan sehingga training tidak crash dan tidak jatuh ke failure path).
+        "use_lora": True,
         "batch_size": 28,
     },
     "9_12_b": {
