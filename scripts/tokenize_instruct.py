@@ -299,6 +299,59 @@ def main(training_request_path: str):
         max_length=max_length,
     )
 
+    # ── Post-tokenization: dedup + stratified split ──────────────────────────
+    # Setelah tokenisasi selesai, kita merge train+dev yang baru di-tokenize,
+    # jalankan exact-dedup untuk buang token sequence identik, lalu re-split
+    # dengan stratified split berbasis panjang sequence agar distribusi dev
+    # mencerminkan distribusi train (tidak kebetulan berisi semua sample pendek).
+    #
+    # Dibungkus try/except agar jika modul belum ada atau gagal,
+    # file tokenized yang sudah ada tidak terganggu.
+    train_tok_path = f"datasets/train_tokenized_{task_id}.json"
+    dev_tok_path   = f"datasets/dev_tokenized_{task_id}.json"
+    try:
+        from seq_quality_filter import exact_dedup
+        from stratified_split import length_stratified_split
+
+        with open(train_tok_path, "r") as _f:
+            _train_tok = json.load(_f)
+        with open(dev_tok_path, "r") as _f:
+            _dev_tok = json.load(_f)
+
+        _all_tok = _train_tok + _dev_tok
+        print(
+            f"[tokenize] pre-dedup: {len(_train_tok)} train + {len(_dev_tok)} dev "
+            f"= {len(_all_tok)} total",
+            flush=True,
+        )
+
+        _all_tok = exact_dedup(_all_tok)
+
+        _dev_new, _train_new = length_stratified_split(
+            _all_tok,
+            dev_ratio=0.1,
+            max_dev=800,
+            min_dev=50,
+            seed=42,
+        )
+
+        with open(train_tok_path, "w") as _f:
+            json.dump(_train_new, _f, ensure_ascii=False)
+        with open(dev_tok_path, "w") as _f:
+            json.dump(_dev_new, _f, ensure_ascii=False)
+
+        print(
+            f"[tokenize] post-split: {len(_train_new)} train, {len(_dev_new)} dev",
+            flush=True,
+        )
+        del _train_tok, _dev_tok, _all_tok, _train_new, _dev_new
+
+    except Exception as _split_err:
+        print(
+            f"[tokenize] dedup+stratified split dilewati: {_split_err}",
+            flush=True,
+        )
+
     t2 = datetime.now()
     print(f"Tokenization completed in {(t2 - t1).seconds} seconds")
 

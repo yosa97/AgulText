@@ -251,11 +251,18 @@ def get_training_json(train_info: dict) -> dict:
         "warmup_steps": max(5, min(50, int(train_info.get("min_steps", 100) * 0.1))),
     }
 
-    # there are models that do not support packing, so we need to check if the model supports packing
-    if run_config["disable_fa"] == "True" or model_architecture.strip().lower() in [
-        "optforcausallm"
-    ]:
-        run_config["packing"] = "False"
+    # Packing mode:
+    # - Model dengan Flash Attention → "fa" (isolasi sequence benar, aman penuh)
+    # - Model tanpa FA (OPT, GPT-NeoX tertentu) → "naive" (packing tetap aktif
+    #   untuk throughput lebih tinggi, tanpa isolation — risk cross-contamination
+    #   antar sequence minimal untuk supervised fine-tuning)
+    # - Sebelumnya OPT dimatikan packing sama sekali → buang throughput
+    _arch_lower = model_architecture.strip().lower()
+    if run_config["disable_fa"] == "True" or _arch_lower in ["optforcausallm"]:
+        run_config["packing"] = "True"
+        run_config["packing_mode"] = "naive"
+    else:
+        run_config["packing_mode"] = "fa"
 
     if model_name in FIXED_BS_CONFIG:
         run_config["batch_size"] = FIXED_BS_CONFIG[model_name]["batch_size"]
@@ -324,6 +331,8 @@ def get_training_json(train_info: dict) -> dict:
     train_request["adjust_batch_size"] = False
     train_request["periodic_save_steps"] = 500
     train_request["checking_step"] = 70
+    # Packing mode diteruskan ke tokenizer agar tahu cara pack sequence
+    train_request["packing_mode"] = run_config.get("packing_mode", "fa")
 
     if param_nums < 1_000_000_000:
         train_request["min_steps"] = max(

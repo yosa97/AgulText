@@ -12,6 +12,8 @@ from transformers.trainer_utils import is_main_process
 from dataclasses import dataclass, field
 from transformers import Trainer
 from customized_trainer import resize_if_needed, set_generation_config, CustomEvalSaveCallback, WhenToEvalHandler, init_wandb
+from soup_callback import ModelSoupCallback
+from final_dev_train import run_final_dev_train
 
 # from packing.packed_dataset import PackedDataset
 from transformers import (
@@ -472,6 +474,13 @@ def main():
         checking_mode=train_request.get("checking_mode", "none"),
     )
 
+    # Soup callback: kumpulkan top-K checkpoint, rata-ratakan di akhir training.
+    # Berbeda dari winner (greedy soup) — kita pakai uniform averaging
+    # (lebih cepat, satu eval, tidak butuh iterasi per kandidat).
+    _soup_cb = ModelSoupCallback(
+        submission_dir=train_request["submission_dir"],
+    )
+
     # Use KLRegularizedTrainer when the validator requests KL regularization.
     # Falls back to standard Trainer when kl_coef == 0 (no-op, identical behaviour).
     if kl_coef > 0.0:
@@ -483,7 +492,7 @@ def main():
             train_dataset=train_ds,
             eval_dataset=dev_ds,
             kl_coef=kl_coef,
-            callbacks=[_eval_callback],
+            callbacks=[_eval_callback, _soup_cb],
         )
     else:
         trainer = Trainer(
@@ -492,9 +501,12 @@ def main():
             args=training_args,
             train_dataset=train_ds,
             eval_dataset=dev_ds,
-            callbacks=[_eval_callback],
+            callbacks=[_eval_callback, _soup_cb],
         )
 
+    # Berikan referensi trainer ke soup callback agar evaluate() bisa dipanggil
+    # dari on_train_end (untuk menilai apakah rata-rata lebih baik dari best single).
+    _soup_cb.trainer = trainer
     trainer.tokenizer = tokenizer
 
     import sys as _sys
@@ -567,6 +579,22 @@ def main():
                     log_info(f"[emergency-save2] GAGAL: {_es2_exc}")
                     _sys.stderr.write(f"[emergency-save2] GAGAL: {_es2_exc}\n")
                     _sys.stderr.flush()
+
+    # ── Final dev pass: satu epoch terakhir LR kecil pada dev set ──────────
+    # Dipanggil setelah emergency save agar submission_dir pasti berisi checkpoint.
+    # Jika sisa waktu < 2 menit, run_final_dev_train() mengabaikan dirinya sendiri.
+    # Semua rank memanggil ini (DDP-safe di dalam fungsi).
+    try:
+        run_final_dev_train(
+            trainer,
+            submission_dir=train_request["submission_dir"],
+            end_time=train_request["end_time"],
+            base_lr=float(training_args.learning_rate),
+            local_rank=LOCAL_RANK,
+            log=log_info,
+        )
+    except Exception as _fdt_exc:
+        log_info(f"[final_dev] dilewati karena error: {_fdt_exc}")
 
     if is_main_process(LOCAL_RANK):
         success_file = os.path.join(training_args.output_dir, "success.txt")
