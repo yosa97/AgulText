@@ -386,6 +386,21 @@ FILE_COUNT=$(ls "$SUBMIT_DIR" 2>/dev/null | wc -l || echo 0)
     && _check "config.json ada di submission" "ok" "" \
     || _check "config.json ada di submission" "fail" "tidak ada config.json"
 
+# 11. ModelSoupCallback aktif (log on_train_begin muncul saat training dimulai)
+grep -q "\[soup\] siap:" "$FULL_LOG" \
+    && _check "ModelSoupCallback aktif" "ok" "" \
+    || _check "ModelSoupCallback aktif" "fail" "tidak ada '[soup] siap:' — soup_callback tidak ter-load"
+
+# 12. seq_quality_filter berjalan (dedup setelah tokenisasi)
+grep -q "\[seq_quality\] dedup:" "$FULL_LOG" \
+    && _check "seq_quality_filter (dedup) berjalan" "ok" "" \
+    || _check "seq_quality_filter (dedup) berjalan" "fail" "tidak ada '[seq_quality] dedup:' — filter gagal/dilewati"
+
+# 13. final_dev_train dipanggil (boleh skip karena sisa waktu, tapi harus muncul di log)
+grep -qE "\[final_dev\] (mulai|dilewati)" "$FULL_LOG" \
+    && _check "final_dev_train dipanggil" "ok" "" \
+    || _check "final_dev_train dipanggil" "fail" "tidak ada '[final_dev]' — mungkin exception sebelum dipanggil"
+
 echo ""
 echo "  Total: $PASS lulus, $FAIL gagal"
 echo "════════════════════════════════════════════════════════"
@@ -423,6 +438,28 @@ SEQ_LINES=$(grep "\[seq_analyzer\]" "$FULL_LOG" | head -3 || true)
 if [ -n "$SEQ_LINES" ]; then
     echo "Cuplikan Adaptive max_length:"
     echo "$SEQ_LINES" | sed 's/^/  /'
+    echo ""
+fi
+
+# Tampilkan ringkasan seq_quality_filter (dedup + outlier)
+QUALITY_LINES=$(grep "\[seq_quality\]" "$FULL_LOG" | head -4 || true)
+if [ -n "$QUALITY_LINES" ]; then
+    echo "Cuplikan seq_quality_filter:"
+    echo "$QUALITY_LINES" | sed 's/^/  /'
+    echo ""
+fi
+
+# Tampilkan hasil soup averaging (apakah avg menang atau rollback)
+SOUP_END=$(grep -E "\[soup\] (rata-rata (LEBIH BAIK|tidak lebih baik)|hanya [0-9]+ snapshot)" "$FULL_LOG" | tail -1 || true)
+if [ -n "$SOUP_END" ]; then
+    echo "Soup averaging: $SOUP_END"
+    echo ""
+fi
+
+# Tampilkan status final_dev_train
+FDEV_LINE=$(grep -E "\[final_dev\] (selesai|dilewati|mulai)" "$FULL_LOG" | tail -1 || true)
+if [ -n "$FDEV_LINE" ]; then
+    echo "Final dev pass: $FDEV_LINE"
     echo ""
 fi
 

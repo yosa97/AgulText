@@ -12,7 +12,7 @@
 #    HF_TOKEN=hf_xxx HF_REPO=yosa97/test-dpo bash examples/run_dpo.sh
 # =============================================================================
 
-set -e
+set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -133,7 +133,12 @@ mkdir -p "$CACHE_DIR/internal_datasets"
 mkdir -p "$CACHE_DIR/soutputs"
 mkdir -p "$CACHE_DIR/wandb"
 
-echo ">>> Menjalankan container training DPO..."
+FULL_LOG="$CACHE_DIR/dpo_run_${TASK_ID}.log"
+
+echo ">>> Menjalankan container training DPO... (log: $FULL_LOG)"
+echo ""
+
+set +e
 docker run --rm \
     --gpus all \
     --ipc=host \
@@ -190,20 +195,74 @@ api.upload_folder(
 print(\"Upload selesai: https://huggingface.co/$HF_REPO\")
 "
         fi
-    '
+    ' 2>&1 | tee "$FULL_LOG"
+DOCKER_EXIT="${PIPESTATUS[0]}"
+set -e
 
 SUBMIT_DIR="$CACHE_DIR/checkpoints/$TASK_ID/$REPO_NAME"
-DOCKER_EXIT=$?
 
 echo ""
 echo "════════════════════════════════════════════════════════"
-echo "  Ringkasan DPO Training"
+echo "  VERIFIKASI HASIL TEST DPO"
 echo "════════════════════════════════════════════════════════"
+
+PASS=0
+FAIL=0
+
+_check() {
+    local label="$1"
+    local result="$2"
+    local note="$3"
+    if [ "$result" = "ok" ]; then
+        echo "  ✓  $label"
+        PASS=$((PASS+1))
+    else
+        echo "  ✗  $label  ← $note"
+        FAIL=$((FAIL+1))
+    fi
+}
+
+# 1. Container selesai tanpa crash
+[ "$DOCKER_EXIT" -eq 0 ] \
+    && _check "Container selesai normal (exit 0)" "ok" "" \
+    || _check "Container selesai normal (exit 0)" "fail" "exit=$DOCKER_EXIT"
+
+# 2. Training masuk success path
+grep -q "Training successfully done" "$FULL_LOG" \
+    && _check "Training success path" "ok" "" \
+    || _check "Training success path" "fail" "tidak ada 'Training successfully done'"
+
+# 3. loss.txt ada di submission
+[ -f "$SUBMIT_DIR/loss.txt" ] \
+    && _check "loss.txt ada (eval loss tercatat)" "ok" "" \
+    || _check "loss.txt ada (eval loss tercatat)" "fail" "tidak ada loss.txt — training gagal sebelum eval"
+
+# 4. Submission dir berisi model
+FILE_COUNT=$(ls "$SUBMIT_DIR" 2>/dev/null | wc -l || echo 0)
+[ "$FILE_COUNT" -ge 2 ] \
+    && _check "Submission dir berisi model ($FILE_COUNT files)" "ok" "" \
+    || _check "Submission dir berisi model" "fail" "hanya $FILE_COUNT file di $SUBMIT_DIR"
+
+# 5. config.json ada
+[ -f "$SUBMIT_DIR/config.json" ] \
+    && _check "config.json ada di submission" "ok" "" \
+    || _check "config.json ada di submission" "fail" "tidak ada config.json"
+
+# 6. ModelSoupCallback aktif (soup terintegrasi di train_dpo.py)
+grep -q "\[soup\] siap:" "$FULL_LOG" \
+    && _check "ModelSoupCallback (DPO) aktif" "ok" "" \
+    || _check "ModelSoupCallback (DPO) aktif" "fail" "tidak ada '[soup] siap:' — soup_callback tidak ter-load"
+
+echo ""
+echo "  Total: $PASS lulus, $FAIL gagal"
+echo "════════════════════════════════════════════════════════"
+
 echo ""
 echo "File output:"
+echo "  Log lengkap   : $FULL_LOG"
 echo "  Submission    : $SUBMIT_DIR"
 
-# Tampilkan eval loss dari loss.txt (ditulis trainer setelah evaluasi terbaik)
+# Tampilkan eval loss dari loss.txt
 LOSS_FILE="$SUBMIT_DIR/loss.txt"
 if [ -f "$LOSS_FILE" ]; then
     LOSS_CONTENT=$(cat "$LOSS_FILE")
@@ -216,8 +275,15 @@ else
 fi
 echo ""
 
+# Tampilkan hasil soup averaging DPO
+SOUP_END=$(grep -E "\[soup\] (rata-rata (LEBIH BAIK|tidak lebih baik)|hanya [0-9]+ snapshot)" "$FULL_LOG" | tail -1 || true)
+if [ -n "$SOUP_END" ]; then
+    echo "Soup averaging DPO: $SOUP_END"
+    echo ""
+fi
+
 FILE_COUNT=$(ls "$SUBMIT_DIR" 2>/dev/null | wc -l || echo 0)
-if [ -n "$HF_REPO" ] && grep -q "Upload selesai:" /tmp/dpo_run_${TASK_ID}.log 2>/dev/null; then
+if [ -n "$HF_REPO" ] && grep -q "Upload selesai:" "$FULL_LOG" 2>/dev/null; then
     echo "✓ Model terupload → https://huggingface.co/$HF_REPO"
 elif [ -n "$HF_REPO" ] && [ "$DOCKER_EXIT" -eq 0 ]; then
     echo "✓ Training selesai → $SUBMIT_DIR"
@@ -226,3 +292,6 @@ elif [ -z "$HF_REPO" ] && [ "$FILE_COUNT" -ge 2 ]; then
     echo "✓ Training selesai → $SUBMIT_DIR"
     echo "TIP: Upload ke HF: HF_TOKEN=hf_xxx HF_REPO=yosa97/nama-repo bash examples/run_dpo.sh"
 fi
+
+# Kembalikan exit code berdasarkan hasil verifikasi
+[ "$FAIL" -eq 0 ] && exit 0 || exit 1
