@@ -28,6 +28,7 @@ import argparse
 import os
 from customized_trainer import resize_if_needed, set_generation_config, CustomEvalSaveCallback, WhenToEvalHandler, init_wandb
 from state_manager import get_state, set_state
+from soup_callback import ModelSoupCallback
 
 # from packing.packed_dataset import PackedDataset
 from transformers import (
@@ -308,6 +309,12 @@ def main():
         checking_step = total_steps_per_epoch - 2
     
 
+    # Soup callback: kumpulkan checkpoint terbaik dan rata-ratakan di akhir.
+    # DPOTrainer menghasilkan eval_loss (DPO loss) yang dipakai sebagai kunci pool.
+    # run_final_dev_train tidak digunakan di DPO: DPO objective ≠ NLL yang dievaluasi
+    # validator, sehingga dev pass dengan DPO loss tidak menjamin perbaikan skor.
+    _soup_cb = ModelSoupCallback(submission_dir=train_request["submission_dir"])
+
     trainer = DPOTrainer(
         model=model,
         ref_model=ref_model,
@@ -327,11 +334,13 @@ def main():
                 total_steps_all_epochs=total_steps_all_epochs,
                 end_time=train_request["end_time"],
                 checking_mode=train_request.get("checking_mode", "none")
-            )
+            ),
+            _soup_cb,
         ],
     )
-    
-    print("Start training ...", flush=True)       
+    _soup_cb.trainer = trainer
+
+    print("Start training ...", flush=True)
     # trainer.train()
     trainer.train()
     
