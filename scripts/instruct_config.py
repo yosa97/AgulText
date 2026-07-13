@@ -49,9 +49,12 @@ INSTRUCT_CONFIG = {
         "lr": 7e-5,
         "distributed": "ddp",
         "gpu_count": 2,
-        # Full weight; OOM handled via adaptive max_length + batch_size fallback
-        "use_lora": False,
-        "batch_size": 40,
+        # LoRA diaktifkan untuk mencegah OOM pada dataset sekuens panjang (max_length=2048).
+        # Full fine-tuning 4-5B dengan batch_size=40 bisa mencapai ~75 GB per GPU jika
+        # seq panjang — terlalu dekat batas 80 GB. LoRA + batch_size=28 memberi headroom
+        # yang cukup sambil tetap memberikan kualitas fine-tuning yang baik.
+        "use_lora": True,
+        "batch_size": 28,
     },
     "5_9_b": {
         "lr": 3.5e-5,
