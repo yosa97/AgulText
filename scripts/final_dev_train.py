@@ -9,12 +9,20 @@ Mengapa aman:
   memaksimalkan pemanfaatan data.
 
 Perbedaan dari winner (dev_pass.py):
-  - Kita menggunakan optimizer AdamW standar (bukan reuse trainer optimizer)
-    dengan reset momentum lebih eksplisit
-  - Kita hitung effective_lr dari min_lr_rate × current_lr
-    (bukan langsung dari args.learning_rate)
+  - Menggunakan optimizer SGD + Nesterov momentum (winner: AdamW)
+    → LR flat tanpa adaptive per-param state, cocok untuk fine-tuning kecil
+  - Menghitung effective_lr dari min_lr_rate × current_lr
+    (winner menggunakan args.learning_rate × multiplier langsung)
   - Guard waktu: cek sisa waktu sebelum mulai, batalkan jika < 2 menit tersisa
-  - Tidak reuse trainer.model_wrapped untuk menghindari double-hook pada DDP
+  - Save pattern: backup-in-place + restore jika gagal (winner: staging+rename)
+
+DDP-safe (mengikuti pola winner):
+  - Gunakan trainer.model_wrapped (bukan trainer.model) — menghindari
+    pembuatan DDP hook kedua yang menyebabkan error saat backward.
+  - Gunakan accelerator.gradient_state._set_sync_gradients(do_sync) +
+    accelerator.no_sync(model=ddp_model) — pola resmi HF Accelerate untuk
+    mengontrol kapan gradient di-sync antar rank.
+  - Tutup dengan torch.distributed.barrier() agar semua rank sinkron.
 
 Dipanggil dari train_instruct.py setelah trainer.train() selesai dan
 checkpoint terbaik sudah di submission_dir.
@@ -152,9 +160,19 @@ def run_final_dev_train(
         f"(={lr_rate:.0%} × {base_lr:.2e}), sisa={secs:.0f}s"
     )
 
-    # Model yang sudah wrapped oleh trainer
-    model = trainer.model
-    unwrapped = _unwrap(model)
+    import inspect
+
+    # Gunakan model_wrapped (sudah DDP-wrapped oleh trainer) — bukan trainer.model
+    # yang belum wrapped. Ini menghindari pembuatan set DDP reducer hooks kedua
+    # saat kita memanggil training_step, yang menyebabkan "DDP communication hook
+    # error" saat backward. Mengikuti pola winner yang terbukti aman.
+    ddp_model = getattr(trainer, "model_wrapped", None) or trainer.model
+    unwrapped  = _unwrap(ddp_model)
+    accelerator = getattr(trainer, "accelerator", None)
+
+    # Pre-build kwargs untuk training_step (cek sekali saja, bukan per iterasi)
+    _ts_sig    = inspect.signature(trainer.training_step)
+    _ts_kwargs = {"num_items_in_batch": None} if "num_items_in_batch" in _ts_sig.parameters else {}
 
     trainable = [p for p in unwrapped.parameters() if p.requires_grad]
     if not trainable:
@@ -185,11 +203,8 @@ def run_final_dev_train(
         weight_decay=0.0,
     )
 
-    # Dev loader dari trainer — batch size eval (kecil), akumulasi lebih banyak
+    # Dev loader dari trainer — pakai eval dataloader (batch kecil, no shuffle)
     dev_loader = trainer.get_eval_dataloader()
-    train_bs   = int(getattr(trainer.args, "per_device_train_batch_size", 1) or 1)
-    eval_bs    = int(getattr(trainer.args, "per_device_eval_batch_size", 1) or 1)
-    grad_accum = max(1, round(train_bs / max(1, eval_bs)))
 
     # Lockstep DDP: semua rank proses jumlah step yang sama
     n_steps = len(dev_loader)
@@ -202,7 +217,7 @@ def run_final_dev_train(
         log("[final_dev] dev loader kosong, skip")
         return
 
-    model.train()
+    ddp_model.train()
     n_opt_steps = 0
     for step, batch in enumerate(dev_loader):
         if step >= n_steps:
@@ -213,34 +228,23 @@ def run_final_dev_train(
             log(f"[final_dev] waktu hampir habis, berhenti di step {step}")
             break
 
-        is_last = (step + 1) >= n_steps or ((step + 1) % grad_accum == 0)
+        # Dev pass tidak memakai gradient accumulation: setiap micro-batch langsung
+        # update parameter. Alasannya:
+        #   1. Dev set kecil (satu epoch) — efisiensi accumulation tidak signifikan
+        #   2. Menghindari pemakaian _set_sync_gradients (private API) yang berpotensi
+        #      menyebabkan masalah versi bila HF Accelerate di-update
+        #   3. DDP selalu sync tiap step — lebih aman, tidak ada edge case no_sync
+        # Gradient SELALU di-sync → tidak perlu no_sync / accumulation logic.
+        trainer.training_step(ddp_model, batch, **_ts_kwargs)
 
-        # DDP gradient sync hanya pada boundary accumulation
-        if torch.distributed.is_initialized() and not is_last:
-            ctx = trainer.accelerator.no_sync(model=model) if hasattr(trainer, "accelerator") else torch.no_grad()
-        else:
-            import contextlib
-            ctx = contextlib.nullcontext()
-
-        with ctx:
-            # Gunakan training_step trainer agar loss dihitung sama persis
-            # (termasuk shift label, masking -100, dll)
-            import inspect
-            ts_sig = inspect.signature(trainer.training_step)
-            if "num_items_in_batch" in ts_sig.parameters:
-                loss_val = trainer.training_step(model, batch, num_items_in_batch=None)
+        if max_grad_norm and max_grad_norm > 0:
+            if accelerator is not None:
+                accelerator.clip_grad_norm_(ddp_model.parameters(), max_grad_norm)
             else:
-                loss_val = trainer.training_step(model, batch)
-
-        if is_last:
-            if max_grad_norm and max_grad_norm > 0:
-                if hasattr(trainer, "accelerator"):
-                    trainer.accelerator.clip_grad_norm_(model.parameters(), max_grad_norm)
-                else:
-                    torch.nn.utils.clip_grad_norm_(trainable, max_grad_norm)
-            dev_opt.step()
-            model.zero_grad(set_to_none=True)
-            n_opt_steps += 1
+                torch.nn.utils.clip_grad_norm_(trainable, max_grad_norm)
+        dev_opt.step()
+        ddp_model.zero_grad(set_to_none=True)
+        n_opt_steps += 1
 
     log(
         f"[final_dev] selesai: {n_steps} micro-step, {n_opt_steps} opt-step, "

@@ -34,8 +34,10 @@ from transformers.trainer_utils import is_main_process
 LOCAL_RANK = int(os.getenv("LOCAL_RANK", "0"))
 
 # Overfitting: eval_loss > best * (1 + threshold) selama patience kali berturut
-_OVERFIT_THRESHOLD = 0.06    # 6% lebih buruk dari best
-_OVERFIT_PATIENCE  = 3       # 3 eval berturut-turut
+# Threshold 15% dan patience 5: cukup longgar agar training kecil tidak terhenti
+# terlalu cepat, tapi masih sensitif terhadap overfitting yang nyata.
+_OVERFIT_THRESHOLD = 0.15    # 15% lebih buruk dari best (naik dari 6%)
+_OVERFIT_PATIENCE  = 5       # 5 eval berturut-turut (naik dari 3)
 _POOL_MAX          = 6       # maksimum checkpoint di pool
 _MIN_HEADROOM_GB   = 3.0     # buffer minimum (GB) setelah kebutuhan snapshot
 
@@ -225,12 +227,29 @@ class ModelSoupCallback(TrainerCallback):
 
     @torch.no_grad()
     def _apply_uniform_avg(self, model) -> bool:
-        """Rata-ratakan semua snapshot di pool, load ke model, sync semua rank."""
-        if self._pool_size() < 2:
-            return False
+        """Rata-ratakan semua snapshot di pool, load ke model, sync semua rank.
+
+        DDP-safe: broadcast jumlah snapshot dari rank-0 ke semua rank sebelum
+        memutuskan apakah lanjut atau skip.  Non-main rank punya pool kosong
+        (local _pool_size()=0), tapi keputusan harus berdasarkan nilai rank-0
+        agar semua rank agree dan tidak ada split-return yang menyebabkan
+        deadlock pada _sync_params / collective berikutnya.
+        """
         is_main = is_main_process(LOCAL_RANK)
+
+        # Broadcast pool size dari rank-0 agar semua rank agree apakah lanjut.
+        # Non-main punya n=0 secara lokal, kita ganti dengan nilai rank-0.
+        n = self._pool_size()    # rank-0: jumlah nyata; non-main: 0
+        if torch.distributed.is_initialized():
+            dev = next(_unwrap(model).parameters()).device
+            t = torch.tensor([n], dtype=torch.long, device=dev)
+            torch.distributed.broadcast(t, src=0)
+            n = int(t.item())    # semua rank pakai nilai rank-0
+
+        if n < 2:
+            return False         # semua rank return bersama — tidak ada deadlock
+
         if is_main:
-            n = self._pool_size()
             avg: dict[str, torch.Tensor] = {}
             # Iterasi langsung ke _pool_data (sudah terurut ascending by loss)
             for name in self._pool_data[0]["state"]:
@@ -249,7 +268,7 @@ class ModelSoupCallback(TrainerCallback):
             gc.collect()
             print(f"[soup] uniform avg n={n} snapshot → model updated", flush=True)
 
-        self._sync_params(model)
+        self._sync_params(model)   # broadcast rank-0 weights ke semua rank
         return True
 
     # ── Submission update ─────────────────────────────────────────────────────
@@ -383,20 +402,38 @@ class ModelSoupCallback(TrainerCallback):
         if model is None or self.trainer is None:
             return
 
-        if self._pool_size() < 2:
-            print(
-                f"[soup] hanya {self._pool_size()} snapshot di pool, skip averaging",
-                flush=True,
-            )
+        is_main = is_main_process(LOCAL_RANK)
+
+        # ── DDP deadlock fix ──────────────────────────────────────────────────
+        # Hanya rank-0 yang menyimpan snapshot (_update_pool dibatasi is_main).
+        # Non-main rank punya pool kosong. Jika kita biarkan mereka return lebih
+        # awal, mereka tidak akan ikut dalam broadcast/evaluate yang dipanggil
+        # rank-0 → deadlock.
+        #
+        # Solusi: broadcast n_snap dari rank-0 ke semua rank SEBELUM decision.
+        # Semua rank pakai nilai rank-0 untuk memutuskan apakah lanjut atau tidak.
+        n_snap = self._pool_size()   # rank-0: jumlah snapshot; non-main: 0
+        if torch.distributed.is_initialized():
+            dev = next(_unwrap(model).parameters()).device
+            t = torch.tensor([n_snap], dtype=torch.long, device=dev)
+            torch.distributed.broadcast(t, src=0)
+            n_snap = int(t.item())   # semua rank tahu jumlah snapshot rank-0
+
+        if n_snap < 2:
+            if is_main:
+                print(
+                    f"[soup] hanya {self._pool_size()} snapshot di pool, skip averaging",
+                    flush=True,
+                )
             return
 
-        print(
-            f"[soup] mulai uniform averaging dari {self._pool_size()} snapshot",
-            flush=True,
-        )
+        if is_main:
+            print(
+                f"[soup] mulai uniform averaging dari {self._pool_size()} snapshot",
+                flush=True,
+            )
 
         # Simpan bobot saat ini untuk rollback jika avg lebih buruk
-        is_main = is_main_process(LOCAL_RANK)
         current_state = None
         if is_main:
             current_state = {
@@ -414,7 +451,8 @@ class ModelSoupCallback(TrainerCallback):
             avg_metrics = self.trainer.evaluate()
             avg_loss = avg_metrics.get("eval_loss", float("inf"))
         except Exception as e:
-            print(f"[soup] eval gagal setelah averaging: {e}", flush=True)
+            if is_main:
+                print(f"[soup] eval gagal setelah averaging: {e}", flush=True)
             avg_loss = float("inf")
         finally:
             self._evaluating = False
@@ -422,19 +460,21 @@ class ModelSoupCallback(TrainerCallback):
         avg_loss = self._sync_scalar(model, avg_loss)
 
         if avg_loss < self.best_loss - 1e-4:
-            print(
-                f"[soup] rata-rata LEBIH BAIK: {avg_loss:.4f} < best={self.best_loss:.4f} "
-                f"(delta {self.best_loss - avg_loss:.4f})",
-                flush=True,
-            )
+            if is_main:
+                print(
+                    f"[soup] rata-rata LEBIH BAIK: {avg_loss:.4f} < best={self.best_loss:.4f} "
+                    f"(delta {self.best_loss - avg_loss:.4f})",
+                    flush=True,
+                )
             self.best_loss = avg_loss
             self._save_to_submission(model, avg_loss)
         else:
-            print(
-                f"[soup] rata-rata tidak lebih baik ({avg_loss:.4f} >= {self.best_loss:.4f}), "
-                f"rollback ke checkpoint terbaik",
-                flush=True,
-            )
+            if is_main:
+                print(
+                    f"[soup] rata-rata tidak lebih baik ({avg_loss:.4f} >= {self.best_loss:.4f}), "
+                    f"rollback ke checkpoint terbaik",
+                    flush=True,
+                )
             if is_main and current_state is not None:
                 for n, p in _unwrap(model).named_parameters():
                     if n in current_state and p.requires_grad:
@@ -450,7 +490,13 @@ class ModelSoupCallback(TrainerCallback):
             del current_state
         gc.collect()
 
-        print(
-            f"[soup] selesai: best_loss={self.best_loss:.4f} @ step={self.best_step}",
-            flush=True,
-        )
+        if is_main:
+            print(
+                f"[soup] selesai: best_loss={self.best_loss:.4f} @ step={self.best_step}",
+                flush=True,
+            )
+
+        # Barrier akhir — semua rank harus selesai sebelum trainer lanjut.
+        # Mengikuti pola winner yang selalu menutup on_train_end dengan barrier.
+        if torch.distributed.is_initialized():
+            torch.distributed.barrier()
