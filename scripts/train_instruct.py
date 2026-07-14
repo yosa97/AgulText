@@ -92,62 +92,138 @@ def log_trainable_param_summary(model):
     )
 
 
+def _load_kl_ref_model(model_path: str, training_args, device: torch.device):
+    """Muat salinan beku model asal untuk jalur KL full fine-tune.
+
+    Berbeda dari winner (fungsi terpisah di kl_trainer.py) — implementasi ini
+    langsung di train_instruct.py agar semuanya dalam satu file tanpa import ekstra.
+    Hasilnya: model beku di device sama dengan model utama.
+    """
+    attn = "flash_attention_2" if not training_args.disable_fa else "eager"
+    if training_args.use_attn_implementation:
+        attn = training_args.use_attn_implementation
+    ref = transformers.AutoModelForCausalLM.from_pretrained(
+        model_path,
+        torch_dtype=torch.bfloat16,
+        attn_implementation=attn,
+    )
+    ref.to(device)
+    ref.eval()
+    try:
+        ref.config.use_cache = False
+    except Exception:
+        pass
+    for p in ref.parameters():
+        p.requires_grad_(False)
+    log_info(f"[kl] model referensi beku dimuat dari {model_path} di {device}")
+    return ref
+
+
 class KLRegularizedTrainer(Trainer):
     """
-    Trainer with optional KL-divergence regularisation against the frozen base.
-    When kl_coef > 0 and the model has LoRA adapters, the loss becomes:
-        total_loss = ce_loss + kl_coef * KL(fine-tuned || base)
-    The KL term is computed by temporarily disabling the adapter layers so we
-    can get base-model logits without loading a second copy of the model.
-    This matches the validator's evaluation weighting (kl_coef is sent per-task).
+    Trainer dengan penalti KL divergence untuk tugas G.O.D ber-flag KL.
+
+    Loss = CE(finetuned, labels) + kl_coef * KL(P_ft || P_base)
+    KL dihitung pada completion tokens (label != -100), sesuai validator evaluator.
+
+    Perbedaan implementasi dari pendekatan lain:
+    - Forward TANPA label agar logits selalu dimaterialkan (kompatibel liger kernel)
+    - KL dihitung via F.kl_div(log_target=True) dalam float32 — lebih stabil
+      numerik daripada exp() * diff manual di bf16
+    - Mendukung dua jalur base-logits:
+        * LoRA   → context manager disable_adapter() — nol memori ekstra
+        * Full-FT → model referensi beku (ref_model) di device yang sama
+    - model_accepts_loss_kwargs=False memastikan training_step selalu membagi
+      loss dengan gradient_accumulation_steps (scaling akurat di semua versi HF)
     """
 
-    def __init__(self, *args, kl_coef: float = 0.0, **kwargs):
+    def __init__(self, *args, kl_coef: float = 0.0, ref_model=None, use_lora: bool = False, **kwargs):
         super().__init__(*args, **kwargs)
         self.kl_coef = kl_coef
-        self._has_peft = False
-        try:
-            from peft import PeftModel
-            self._has_peft = isinstance(self.model, PeftModel)
-        except ImportError:
-            pass
-        log_info(f"KLRegularizedTrainer: kl_coef={kl_coef}, has_peft={self._has_peft}")
+        self.ref_model = ref_model      # frozen copy untuk full-FT path; None untuk LoRA
+        self.use_lora = use_lora        # True → pakai disable_adapter(), bukan ref_model
+        # Paksa training_step membagi loss dengan grad_accum (bukan compute_loss)
+        # sehingga accumulation steps tidak memperbesar gradien secara salah
+        self.model_accepts_loss_kwargs = False
+        self._kl_first_step = True
+        log_info(
+            f"[kl] KLRegularizedTrainer: coef={kl_coef}, "
+            f"sumber={'lora_adapter' if use_lora else 'frozen_copy'}"
+        )
+
+    def _kl_active(self):
+        return self.kl_coef > 0.0 and (self.use_lora or self.ref_model is not None)
+
+    def _base_logits(self, model, input_ids, attention_mask):
+        """Logits dari model base, tanpa gradien."""
+        with torch.no_grad():
+            if self.use_lora:
+                # LoRA: matikan adapter sementara, jalankan forward
+                with model.disable_adapter():
+                    return model(input_ids=input_ids, attention_mask=attention_mask).logits
+            # Full-FT: gunakan model referensi yang sudah dibekukan
+            if self.ref_model.device != input_ids.device:
+                self.ref_model.to(input_ids.device)
+            return self.ref_model(input_ids=input_ids, attention_mask=attention_mask).logits
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
-        outputs = model(**inputs)
-        ce_loss = outputs.loss if (hasattr(outputs, "loss") and outputs.loss is not None) else outputs[0]
+        input_ids = inputs["input_ids"]
+        attention_mask = inputs.get("attention_mask")
+        labels = inputs["labels"]
 
-        if self.kl_coef <= 0.0 or not self._has_peft:
+        # Forward TANPA labels — memastikan logits selalu ada (aman dengan liger)
+        outputs = model(input_ids=input_ids, attention_mask=attention_mask)
+        logits = outputs.logits  # [B, T, V]
+
+        # Cross-entropy causal-LM standar (shifted)
+        shift_logits = logits[:, :-1, :].contiguous()
+        shift_labels = labels[:, 1:].contiguous()
+        ce_loss = torch.nn.functional.cross_entropy(
+            shift_logits.view(-1, shift_logits.size(-1)),
+            shift_labels.view(-1),
+            ignore_index=-100,
+            label_smoothing=getattr(self.args, "label_smoothing_factor", 0.0) or 0.0,
+        )
+
+        # Aux loss MoE jika model router aktif
+        aux = getattr(outputs, "aux_loss", None)
+        if aux is not None:
+            aux_coef = getattr(getattr(model, "config", None), "router_aux_loss_coef", 0.0)
+            ce_loss = ce_loss + aux_coef * aux
+
+        if not self._kl_active():
             return (ce_loss, outputs) if return_outputs else ce_loss
 
-        # Get base-model logits without a second forward pass allocation
-        with torch.no_grad():
-            try:
-                model.disable_adapter_layers()
-                ref_out = model(**inputs)
-                model.enable_adapter_layers()
-            except Exception as e:
-                log_info(f"KL computation skipped: {e}")
-                return (ce_loss, outputs) if return_outputs else ce_loss
+        # KL(P_ft || P_base) pada completion tokens (unshifted — sesuai evaluator)
+        mask = labels != -100  # [B, T]
+        if mask.any():
+            # Float32 upcast — bf16 terlalu lossy untuk log-softmax di kl_div
+            ft_f32  = logits[mask].float()                                     # [N, V]
+            ref_f32 = self._base_logits(model, input_ids, attention_mask)[mask].float()  # [N, V]
 
-        # Numerically stable KL(train || base) on non-padding tokens only
-        train_log = torch.nn.functional.log_softmax(outputs.logits.float(), dim=-1)
-        ref_log = torch.nn.functional.log_softmax(ref_out.logits.float(), dim=-1)
-        kl_per_token = (torch.exp(train_log) * (train_log - ref_log)).sum(dim=-1)  # [B, T]
+            log_ft   = torch.nn.functional.log_softmax(ft_f32,  dim=-1)   # log P_ft
+            log_base = torch.nn.functional.log_softmax(ref_f32, dim=-1)   # log P_base
 
-        if "labels" in inputs:
-            mask = (inputs["labels"] != -100).float()
-            kl_loss = (kl_per_token * mask).sum() / (mask.sum().clamp(min=1.0))
-        else:
+            # kl_div(input=log_Q, target=log_P, log_target=True):
+            #   elemen[i,v] = exp(log_P[i,v]) * (log_P[i,v] - log_Q[i,v])
+            #               = P_ft * (log P_ft - log P_base)
+            # sum per token → [N], mean → scalar
+            kl_per_token = torch.nn.functional.kl_div(
+                log_base, log_ft, reduction="none", log_target=True
+            ).sum(dim=-1)  # [N]
             kl_loss = kl_per_token.mean()
+        else:
+            kl_loss = logits.new_zeros(())
 
         total_loss = ce_loss + self.kl_coef * kl_loss
 
-        if self.state.global_step % 20 == 0 and is_main_process(LOCAL_RANK):
+        if self._kl_first_step and is_main_process(LOCAL_RANK):
             log_info(
-                f"step={self.state.global_step} ce={ce_loss.item():.4f} "
-                f"kl={kl_loss.item():.4f} total={total_loss.item():.4f}"
+                f"[kl] langkah pertama: ce={ce_loss.item():.4f} "
+                f"kl={float(kl_loss):.4f} total={total_loss.item():.4f} "
+                f"(coef={self.kl_coef})"
             )
+            self._kl_first_step = False
 
         return (total_loss, outputs) if return_outputs else total_loss
 
@@ -393,10 +469,24 @@ def main():
     # some model need to set the generation config or encounter the invalid generation config error
     set_generation_config(train_request["model_name"], model)
 
-    # KL regularization: validator sends kl_coef > 0 for ~20% of instruct tasks.
-    # When present, we train with loss = ce_loss + kl_coef * KL(model || base).
-    kl_coef = float(train_request.get("kl_coef", 0.0))
-    log_info(f"kl_coef={kl_coef} (from train_request)")
+    # KL regularization: dua sumber — env var (USE_KL/KL_COEF, cara container
+    # validator menyuntikkan) atau train_request["kl_coef"] (kompatibilitas).
+    # Env var diprioritaskan karena itulah mekanisme resmi G.O.D task runner.
+    _use_kl_env = os.environ.get("USE_KL") == "1"
+    _kl_coef_env = os.environ.get("KL_COEF", "")
+    kl_coef = 0.0
+    if _use_kl_env and _kl_coef_env:
+        try:
+            kl_coef = float(_kl_coef_env)
+        except (ValueError, TypeError):
+            log_info(f"[kl] KL_COEF env var tidak valid ({_kl_coef_env!r}), dinonaktifkan")
+    if kl_coef == 0.0:
+        kl_coef = float(train_request.get("kl_coef", 0.0))
+    log_info(
+        f"[kl] kl_coef={kl_coef} "
+        f"(USE_KL={_use_kl_env}, KL_COEF_env={_kl_coef_env!r}, "
+        f"train_request={train_request.get('kl_coef', 0.0)})"
+    )
 
     # Check if this is the main process and create the output directory
     if is_main_process(LOCAL_RANK):  # Only create directory on main process
@@ -481,10 +571,25 @@ def main():
         submission_dir=train_request["submission_dir"],
     )
 
-    # Use KLRegularizedTrainer when the validator requests KL regularization.
-    # Falls back to standard Trainer when kl_coef == 0 (no-op, identical behaviour).
+    # ── Model referensi beku untuk jalur KL full fine-tune ──────────────────
+    # LoRA tidak butuh ini (adapter bisa dinonaktifkan via context manager).
+    # Full-FT: muat salinan beku sebelum trainer dibuat agar device sudah benar.
+    # Error loading → KL dimatikan (training tetap lanjut tanpa penalti KL).
+    _kl_ref_model = None
+    if kl_coef > 0.0 and not training_args.use_lora:
+        try:
+            _kl_device = next(model.parameters()).device
+            _kl_ref_model = _load_kl_ref_model(
+                train_request["model_path"], training_args, _kl_device
+            )
+        except Exception as _kl_load_err:
+            log_info(f"[kl] gagal muat model referensi ({_kl_load_err}), KL dinonaktifkan")
+            kl_coef = 0.0
+
+    # Gunakan KLRegularizedTrainer saat KL aktif.
+    # Fallback ke Trainer biasa kalau kl_coef == 0 (identik, tanpa overhead).
     if kl_coef > 0.0:
-        log_info(f"Using KLRegularizedTrainer with kl_coef={kl_coef}")
+        log_info(f"[kl] menggunakan KLRegularizedTrainer, coef={kl_coef}")
         trainer = KLRegularizedTrainer(
             model=model,
             tokenizer=tokenizer,
@@ -492,6 +597,8 @@ def main():
             train_dataset=train_ds,
             eval_dataset=dev_ds,
             kl_coef=kl_coef,
+            ref_model=_kl_ref_model,          # None untuk LoRA, frozen copy untuk full-FT
+            use_lora=bool(training_args.use_lora),
             callbacks=[_eval_callback, _soup_cb],
         )
     else:

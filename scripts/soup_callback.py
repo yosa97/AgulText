@@ -36,8 +36,8 @@ LOCAL_RANK = int(os.getenv("LOCAL_RANK", "0"))
 # Overfitting: eval_loss > best * (1 + threshold) selama patience kali berturut
 # Threshold 15% dan patience 5: cukup longgar agar training kecil tidak terhenti
 # terlalu cepat, tapi masih sensitif terhadap overfitting yang nyata.
-_OVERFIT_THRESHOLD = 0.15    # 15% lebih buruk dari best (naik dari 6%)
-_OVERFIT_PATIENCE  = 5       # 5 eval berturut-turut (naik dari 3)
+_OVERFIT_THRESHOLD = 0.08    # 8% lebih buruk dari best — lebih sensitif dari 15%
+_OVERFIT_PATIENCE  = 4       # 4 eval berturut-turut — antara 3 (winner) dan 5 (lama)
 _POOL_MAX          = 6       # maksimum checkpoint di pool
 _MIN_HEADROOM_GB   = 3.0     # buffer minimum (GB) setelah kebutuhan snapshot
 
