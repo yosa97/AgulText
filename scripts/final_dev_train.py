@@ -19,10 +19,14 @@ Perbedaan dari winner (dev_pass.py):
 DDP-safe (mengikuti pola winner):
   - Gunakan trainer.model_wrapped (bukan trainer.model) — menghindari
     pembuatan DDP hook kedua yang menyebabkan error saat backward.
-  - Gunakan accelerator.gradient_state._set_sync_gradients(do_sync) +
-    accelerator.no_sync(model=ddp_model) — pola resmi HF Accelerate untuk
-    mengontrol kapan gradient di-sync antar rank.
+  - Tidak pakai gradient accumulation / _set_sync_gradients (private API) —
+    setiap micro-batch langsung sync, lebih sederhana dan aman.
   - Tutup dengan torch.distributed.barrier() agar semua rank sinkron.
+
+Evaluation gate (perbaikan kritis post-tournament-1):
+  Setelah dev pass, model dievaluasi. Hasil hanya disimpan ke submission_dir
+  jika eval_loss post-dev LEBIH RENDAH dari loss.txt yang ada. Ini mencegah
+  overwrite checkpoint terbaik dengan model yang lebih buruk.
 
 Dipanggil dari train_instruct.py setelah trainer.train() selesai dan
 checkpoint terbaik sudah di submission_dir.
@@ -258,9 +262,60 @@ def run_final_dev_train(
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
-    # Simpan hasil ke submission (rank-0 saja)
+    # ── Evaluation gate: hanya simpan jika dev pass menghasilkan model lebih baik ──
+    #
+    # Root cause kegagalan tournament: sebelumnya dev pass SELALU overwrite
+    # submission_dir tanpa evaluasi, bahkan jika hasilnya lebih buruk.
+    # Sekarang kita evaluasi dulu → bandingkan dengan best checkpoint → simpan
+    # hanya jika eval_loss post-dev LEBIH RENDAH dari yang sudah ada.
+    #
+    # trainer.evaluate() adalah collective operation — SEMUA rank harus memanggil.
+    ddp_model.eval()
+    post_dev_metrics = trainer.evaluate()
+    post_dev_loss = post_dev_metrics.get("eval_loss", float("inf"))
+    log(f"[final_dev] post-dev eval_loss: {post_dev_loss:.4f}")
+
+    # Baca best loss dari submission_dir/loss.txt (rank-0 baca, broadcast ke semua)
+    current_best_loss = float("inf")
     if is_main_process(local_rank):
-        _save_weights(unwrapped, submission_dir, log)
+        _loss_file = os.path.join(submission_dir, "loss.txt")
+        if os.path.isfile(_loss_file):
+            try:
+                _raw = open(_loss_file).read().strip()
+                current_best_loss = float(_raw.split(",")[-1])
+                log(
+                    f"[final_dev] best loss submission_dir sebelumnya: "
+                    f"{current_best_loss:.4f}"
+                )
+            except Exception as _e:
+                log(f"[final_dev] tidak bisa baca loss.txt: {_e}")
+
+    if torch.distributed.is_initialized():
+        _dev = next(unwrapped.parameters()).device
+        _t = torch.tensor([current_best_loss], dtype=torch.float64, device=_dev)
+        torch.distributed.broadcast(_t, src=0)
+        current_best_loss = float(_t.item())
+
+    # Gate: simpan ke submission_dir hanya jika dev pass menghasilkan loss lebih rendah
+    if is_main_process(local_rank):
+        if post_dev_loss < current_best_loss:
+            log(
+                f"[final_dev] LEBIH BAIK ({post_dev_loss:.4f} < {current_best_loss:.4f})"
+                " — menyimpan ke submission_dir"
+            )
+            _save_weights(unwrapped, submission_dir, log)
+            # Perbarui loss.txt dengan nilai baru
+            try:
+                with open(os.path.join(submission_dir, "loss.txt"), "w") as _fh:
+                    _fh.write(f"dev_pass,{post_dev_loss:.6f}")
+            except Exception as _e:
+                log(f"[final_dev] gagal update loss.txt: {_e}")
+        else:
+            log(
+                f"[final_dev] TIDAK lebih baik "
+                f"({post_dev_loss:.4f} >= {current_best_loss:.4f})"
+                " — best checkpoint dipertahankan, dev pass diabaikan"
+            )
 
     # Barrier agar semua rank selesai sebelum lanjut
     if torch.distributed.is_initialized():
