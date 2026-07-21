@@ -687,21 +687,23 @@ def main():
                     _sys.stderr.write(f"[emergency-save2] GAGAL: {_es2_exc}\n")
                     _sys.stderr.flush()
 
-    # ── Final dev pass: satu epoch terakhir LR kecil pada dev set ──────────
-    # Dipanggil setelah emergency save agar submission_dir pasti berisi checkpoint.
-    # Jika sisa waktu < 2 menit, run_final_dev_train() mengabaikan dirinya sendiri.
-    # Semua rank memanggil ini (DDP-safe di dalam fungsi).
-    try:
-        run_final_dev_train(
-            trainer,
-            submission_dir=train_request["submission_dir"],
-            end_time=train_request["end_time"],
-            base_lr=float(training_args.learning_rate),
-            local_rank=LOCAL_RANK,
-            log=log_info,
-        )
-    except Exception as _fdt_exc:
-        log_info(f"[final_dev] dilewati karena error: {_fdt_exc}")
+    # ── Final dev pass: DINONAKTIFKAN ──────────────────────────────────────
+    # Bug kritis: final_dev_train melatih pada dev set lalu mengevaluasi pada
+    # dev set yang SAMA → loss turun buatan → gate selalu simpan model overfit.
+    # Untuk dataset besar (dev set 500+ samples), SGD ratusan step menyebabkan
+    # regresi berat pada test set validator (test_loss 8.21 vs winner 1.64).
+    # Re-aktifkan setelah evaluation gate diperbaiki dengan held-out subset.
+    # try:
+    #     run_final_dev_train(
+    #         trainer,
+    #         submission_dir=train_request["submission_dir"],
+    #         end_time=train_request["end_time"],
+    #         base_lr=float(training_args.learning_rate),
+    #         local_rank=LOCAL_RANK,
+    #         log=log_info,
+    #     )
+    # except Exception as _fdt_exc:
+    #     log_info(f"[final_dev] dilewati karena error: {_fdt_exc}")
 
     if is_main_process(LOCAL_RANK):
         success_file = os.path.join(training_args.output_dir, "success.txt")
