@@ -336,6 +336,21 @@ def main():
     # log_info(f"Training request: {train_request}", "start")
     task_id = train_request["task_id"]
 
+    # ── Baseline stats dari validator ─────────────────────────────────────────
+    # Validator menyediakan JSON statistik dataset via BASELINE_STATS_PATH env var.
+    # Digunakan untuk: gradient_noise_scale → NEFTune alpha dinamis.
+    _baseline_stats: dict = {}
+    _bs_path = os.environ.get("BASELINE_STATS_PATH", "")
+    if _bs_path and os.path.isfile(_bs_path):
+        try:
+            with open(_bs_path) as _bsf:
+                _baseline_stats = json.load(_bsf)
+            log_info(f"[baseline_stats] loaded: {list(_baseline_stats.keys())}")
+        except Exception as _bs_err:
+            log_info(f"[baseline_stats] gagal baca ({_bs_err}), lanjut tanpa stats")
+    else:
+        log_info(f"[baseline_stats] BASELINE_STATS_PATH={_bs_path!r} — tidak diset atau file tidak ada")
+
     tokenizer = safe_load_tokenizer(train_request["model_path"])
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -586,6 +601,13 @@ def main():
             log_info(f"[kl] gagal muat model referensi ({_kl_load_err}), KL dinonaktifkan")
             kl_coef = 0.0
 
+    # NEFTune: tambahkan noise ke embedding saat training → generalisasi lebih baik.
+    # Alpha=1 default (winner selalu pakai ini); naik ke 5 jika dataset noisy
+    # (gradient_noise_scale > 1.0 dari baseline_stats yang disediakan validator).
+    _grad_noise = float(_baseline_stats.get("gradient_noise_scale", 0.0))
+    _neftune_alpha = 5.0 if _grad_noise > 1.0 else 1.0
+    log_info(f"[neftune] alpha={_neftune_alpha} (gradient_noise_scale={_grad_noise:.3f})")
+
     # Gunakan KLRegularizedTrainer saat KL aktif.
     # Fallback ke Trainer biasa kalau kl_coef == 0 (identik, tanpa overhead).
     if kl_coef > 0.0:
@@ -599,6 +621,7 @@ def main():
             kl_coef=kl_coef,
             ref_model=_kl_ref_model,          # None untuk LoRA, frozen copy untuk full-FT
             use_lora=bool(training_args.use_lora),
+            neftune_noise_alpha=_neftune_alpha,
             callbacks=[_eval_callback, _soup_cb],
         )
     else:
@@ -608,6 +631,7 @@ def main():
             args=training_args,
             train_dataset=train_ds,
             eval_dataset=dev_ds,
+            neftune_noise_alpha=_neftune_alpha,
             callbacks=[_eval_callback, _soup_cb],
         )
 
@@ -654,8 +678,12 @@ def main():
                     if os.path.exists(sub_dir):
                         shutil.rmtree(sub_dir)
                     shutil.copytree(last_ckpt, sub_dir)
+                    _es1_loss = next(
+                        (e["eval_loss"] for e in reversed(trainer.state.log_history) if "eval_loss" in e),
+                        float("inf"),
+                    )
                     with open(os.path.join(sub_dir, "loss.txt"), "w") as _f:
-                        _f.write(f"{trainer.state.global_step},emergency_save")
+                        _f.write(f"{trainer.state.global_step},{_es1_loss:.6f}")
                     log_info(f"[emergency-save] OK — {len(os.listdir(sub_dir))} files")
                     _sys.stderr.write(f"[emergency-save] strategi-1 OK, files={len(os.listdir(sub_dir))}\n")
                     _sys.stderr.flush()
@@ -676,8 +704,12 @@ def main():
                     os.makedirs(sub_dir, exist_ok=True)
                     trainer.save_model(sub_dir)
                     tokenizer.save_pretrained(sub_dir)
+                    _es2_loss = next(
+                        (e["eval_loss"] for e in reversed(trainer.state.log_history) if "eval_loss" in e),
+                        float("inf"),
+                    )
                     with open(os.path.join(sub_dir, "loss.txt"), "w") as _f:
-                        _f.write(f"{trainer.state.global_step},emergency_save2")
+                        _f.write(f"{trainer.state.global_step},{_es2_loss:.6f}")
                     _n2 = len(os.listdir(sub_dir))
                     log_info(f"[emergency-save2] OK — {_n2} files")
                     _sys.stderr.write(f"[emergency-save2] OK, files={_n2}\n")
