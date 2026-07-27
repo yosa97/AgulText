@@ -699,7 +699,13 @@ def main():
             )
             _feasible_steps = _budget_secs / _t_opt_step
             _planned_epochs = int(_feasible_steps // total_steps_per_epoch)
-            _planned_epochs = max(1, min(_planned_epochs, int(training_args.num_train_epochs)))
+            # Cap epoch: lebih dari ~6 epoch pada SFT hampir selalu overfit
+            # (test 3000 sampel: 125 epoch feasible → eval naik 2.37→4.35 padahal
+            # best tercapai di epoch ~6). Waktu berlebih lebih baik tidak dipakai
+            # daripada dipakai overfit. Winner pakai 3 statis; kita 6 karena eval
+            # callback tetap menyimpan best checkpoint sebagai pengaman.
+            _EPOCH_CAP = 6
+            _planned_epochs = max(1, min(_planned_epochs, _EPOCH_CAP, int(training_args.num_train_epochs)))
             if _planned_epochs < int(training_args.num_train_epochs):
                 log_info(
                     f"[epoch_plan] t_opt_step≈{_t_opt_step:.2f}s, "
