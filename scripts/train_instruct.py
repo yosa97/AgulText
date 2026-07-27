@@ -640,6 +640,80 @@ def main():
     _soup_cb.trainer = trainer
     trainer.tokenizer = tokenizer
 
+    # ── LR range test + time-aware epoch planning ─────────────────────────────
+    # Satu ramp eksponensial (Smith/fastai) — BUKAN multi-trial grid seperti
+    # winner. Mengoreksi LR estimasi lookup dengan pengukuran nyata di model+data
+    # run ini, sekaligus mengukur t_per_step untuk perencanaan epoch.
+    # Aman: bobot di-restore setelah ramp; jika gagal → pakai LR estimasi.
+    # Skip untuk DeepSpeed (model belum ter-shard sebelum train()) dan bisa
+    # dimatikan via env LR_RANGE_TEST=0.
+    _t_micro_step = None
+    _do_range_test = (
+        os.environ.get("LR_RANGE_TEST", "1") != "0"
+        and not training_args.deepspeed
+    )
+    if _do_range_test:
+        try:
+            from lr_range_test import run_lr_range_test
+            _rt = run_lr_range_test(
+                trainer,
+                base_lr=float(training_args.learning_rate),
+                end_time=train_request["end_time"],
+                log=log_info,
+            )
+            if _rt.get("lr"):
+                log_info(
+                    f"[lr_range] LR di-update: {training_args.learning_rate:.2e} "
+                    f"→ {_rt['lr']:.2e}"
+                )
+                training_args.learning_rate = _rt["lr"]
+            _t_micro_step = _rt.get("t_per_step")
+        except Exception as _rt_err:
+            log_info(f"[lr_range] gagal ({_rt_err}), lanjut dengan LR estimasi")
+
+    # Epoch planning: dengan epoch_num=999 scheduler cosine tidak pernah decay
+    # (horizon 999 epoch → LR konstan di peak). Dari t_per_step yang diukur kita
+    # hitung berapa epoch yang realistis muat dalam budget → scheduler decay
+    # dengan benar dan training berakhir terencana, bukan dipotong timer.
+    if _t_micro_step and _t_micro_step > 0 and total_steps_per_epoch > 0:
+        try:
+            _end_dt = datetime.datetime.strptime(
+                train_request["end_time"], "%Y-%m-%d %H:%M:%S"
+            )
+            _budget_secs = max(
+                0.0,
+                (_end_dt - datetime.datetime.now()).total_seconds()
+                - float(train_request.get("save_before_remaining_time", 3)) * 60.0,
+            )
+            # t per OPTIMIZER step = t_micro × grad_accum; +20% margin untuk
+            # overhead DDP sync + eval + save yang tidak terukur di probe
+            _t_opt_step = (
+                _t_micro_step
+                * max(1, int(training_args.gradient_accumulation_steps))
+                * 1.20
+            )
+            _feasible_steps = _budget_secs / _t_opt_step
+            _planned_epochs = int(_feasible_steps // total_steps_per_epoch)
+            _planned_epochs = max(1, min(_planned_epochs, int(training_args.num_train_epochs)))
+            if _planned_epochs < int(training_args.num_train_epochs):
+                log_info(
+                    f"[epoch_plan] t_opt_step≈{_t_opt_step:.2f}s, "
+                    f"budget={_budget_secs:.0f}s → epochs {training_args.num_train_epochs} "
+                    f"→ {_planned_epochs}"
+                )
+                training_args.num_train_epochs = float(_planned_epochs)
+                # Recompute warmup dengan horizon step yang baru
+                _new_total = total_steps_per_epoch * _planned_epochs
+                _new_warmup = max(10, min(100, int(_new_total * 0.05)))
+                if _new_warmup != training_args.warmup_steps:
+                    log_info(
+                        f"[epoch_plan] warmup_steps {training_args.warmup_steps} "
+                        f"→ {_new_warmup}"
+                    )
+                    training_args.warmup_steps = _new_warmup
+        except Exception as _ep_err:
+            log_info(f"[epoch_plan] gagal ({_ep_err}), epochs tidak diubah")
+
     import sys as _sys
     _sys.stderr.write(
         f"[train_instruct] trainer dibuat — bs={training_args.per_device_train_batch_size} "
@@ -719,23 +793,23 @@ def main():
                     _sys.stderr.write(f"[emergency-save2] GAGAL: {_es2_exc}\n")
                     _sys.stderr.flush()
 
-    # ── Final dev pass: DINONAKTIFKAN ──────────────────────────────────────
-    # Bug kritis: final_dev_train melatih pada dev set lalu mengevaluasi pada
-    # dev set yang SAMA → loss turun buatan → gate selalu simpan model overfit.
-    # Untuk dataset besar (dev set 500+ samples), SGD ratusan step menyebabkan
-    # regresi berat pada test set validator (test_loss 8.21 vs winner 1.64).
-    # Re-aktifkan setelah evaluation gate diperbaiki dengan held-out subset.
-    # try:
-    #     run_final_dev_train(
-    #         trainer,
-    #         submission_dir=train_request["submission_dir"],
-    #         end_time=train_request["end_time"],
-    #         base_lr=float(training_args.learning_rate),
-    #         local_rank=LOCAL_RANK,
-    #         log=log_info,
-    #     )
-    # except Exception as _fdt_exc:
-    #     log_info(f"[final_dev] dilewati karena error: {_fdt_exc}")
+    # ── Final dev pass (versi baru dengan blend safety) ──────────────────────
+    # Versi lama BUGGED (eval gate di data yang baru dilatih + update per
+    # micro-batch) → menyebabkan rank 9/9. Versi baru: gradient accumulation
+    # mengikuti training, cap 25 update, interpolasi bobot α=0.3 (WiSE-FT) —
+    # keamanan struktural tanpa eval gate. Kill-switch: FINAL_DEV_PASS=0.
+    if os.environ.get("FINAL_DEV_PASS", "1") != "0":
+        try:
+            run_final_dev_train(
+                trainer,
+                submission_dir=train_request["submission_dir"],
+                end_time=train_request["end_time"],
+                base_lr=float(training_args.learning_rate),
+                local_rank=LOCAL_RANK,
+                log=log_info,
+            )
+        except Exception as _fdt_exc:
+            log_info(f"[final_dev] dilewati karena error: {_fdt_exc}")
 
     if is_main_process(LOCAL_RANK):
         success_file = os.path.join(training_args.output_dir, "success.txt")

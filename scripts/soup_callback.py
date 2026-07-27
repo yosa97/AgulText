@@ -41,6 +41,15 @@ _OVERFIT_PATIENCE  = 4       # 4 eval berturut-turut — antara 3 (winner) dan 5
 _POOL_MAX          = 6       # maksimum checkpoint di pool
 _MIN_HEADROOM_GB   = 3.0     # buffer minimum (GB) setelah kebutuhan snapshot
 
+# Rollback saat overfit terkonfirmasi (pendekatan kita, berbeda dari winner):
+# - Konfirmasi = counter >= patience DAN slope regresi linear eval-loss POSITIF
+#   (winner: murni hitung berturut-turut di atas threshold)
+# - Restore dari pool soup yang SUDAH ada (winner: simpan best snapshot terpisah)
+# - Satu kali rollback saja (winner: 2), setelah itu konfirmasi kedua → stop
+_ROLLBACK_LR_FACTOR = 0.6    # LR dipotong ke 60% (winner: 50%)
+_NEFTUNE_BUMP       = 4.0    # alpha ditambah +4 (winner: tangga 5→10→15)
+_SLOPE_WINDOW       = 5      # jumlah eval terakhir untuk regresi slope
+
 
 def _ram_headroom_gb(snap_gb: float) -> float:
     """Headroom RAM tersisa setelah dikurangi estimasi kebutuhan snapshot + soup avg.
@@ -128,6 +137,10 @@ class ModelSoupCallback(TrainerCallback):
         self.overfit_counter: int = 0
         self._evaluating: bool = False
         self.trainer = None
+
+        # Riwayat eval loss untuk uji slope + status rollback
+        self._loss_history: list[float] = []
+        self._rollback_done: bool = False
 
     # ── Snapshot helpers ──────────────────────────────────────────────────────
 
@@ -271,6 +284,85 @@ class ModelSoupCallback(TrainerCallback):
         self._sync_params(model)   # broadcast rank-0 weights ke semua rank
         return True
 
+    # ── Overfit rollback ─────────────────────────────────────────────────────
+
+    def _recent_slope(self) -> float:
+        """Slope regresi linear dari _SLOPE_WINDOW eval loss terakhir.
+
+        Least-squares sederhana pada (index, loss). Slope > 0 = loss sedang
+        naik secara tren, bukan sekadar satu-dua eval yang jelek.
+        """
+        ys = self._loss_history[-_SLOPE_WINDOW:]
+        n = len(ys)
+        if n < 3:
+            return 0.0
+        xs = list(range(n))
+        mx = sum(xs) / n
+        my = sum(ys) / n
+        denom = sum((x - mx) ** 2 for x in xs)
+        if denom == 0:
+            return 0.0
+        return sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / denom
+
+    def _cut_lr(self, factor: float) -> None:
+        """Potong LR optimizer + base_lrs scheduler dengan faktor.
+
+        Scheduler cosine menghitung LR tiap step dari base_lrs, jadi hanya
+        memotong param_groups tidak cukup — base_lrs juga harus dipotong.
+        Dijalankan di SEMUA rank (tiap rank punya optimizer sendiri).
+        """
+        tr = self.trainer
+        if tr is None:
+            return
+        try:
+            if tr.optimizer is not None:
+                for g in tr.optimizer.param_groups:
+                    g["lr"] = g.get("lr", 0.0) * factor
+            sched = getattr(tr, "lr_scheduler", None)
+            if sched is not None and hasattr(sched, "base_lrs"):
+                sched.base_lrs = [b * factor for b in sched.base_lrs]
+        except Exception as e:
+            print(f"[soup] gagal potong LR: {e}", flush=True)
+
+    def _bump_neftune(self, model) -> None:
+        """Naikkan NEFTune alpha (best-effort — skip jika NEFTune tidak aktif).
+
+        HF Trainer menyimpan alpha di trainer.neftune_noise_alpha DAN di atribut
+        module embedding yang di-hook; keduanya di-update.
+        """
+        tr = self.trainer
+        try:
+            cur = getattr(tr, "neftune_noise_alpha", None)
+            if cur is None:
+                return
+            new = float(cur) + _NEFTUNE_BUMP
+            tr.neftune_noise_alpha = new
+            emb = _unwrap(model).get_input_embeddings()
+            if hasattr(emb, "neftune_noise_alpha"):
+                emb.neftune_noise_alpha = new
+            print(f"[soup] NEFTune alpha {cur} → {new}", flush=True)
+        except Exception as e:
+            print(f"[soup] gagal bump NEFTune: {e}", flush=True)
+
+    def _rollback_to_pool_best(self, model) -> None:
+        """Restore bobot dari entry terbaik pool (indeks 0, terurut ascending).
+
+        Rank-0 menyalin dari pool → broadcast ke semua rank via _sync_params.
+        Semua rank HARUS memanggil fungsi ini bersama (collective).
+        """
+        if is_main_process(LOCAL_RANK) and self._pool_size() > 0:
+            best_entry = self._pool_data[0]
+            with torch.no_grad():
+                for n, p in _unwrap(model).named_parameters():
+                    if p.requires_grad and n in best_entry["state"]:
+                        p.data.copy_(best_entry["state"][n].to(p.device, dtype=p.dtype))
+            print(
+                f"[soup] rollback ke pool best (step={best_entry['step']}, "
+                f"loss={self._pool_keys[0]:.4f})",
+                flush=True,
+            )
+        self._sync_params(model)
+
     # ── Submission update ─────────────────────────────────────────────────────
 
     def _save_to_submission(self, model, loss: float) -> None:
@@ -376,18 +468,38 @@ class ModelSoupCallback(TrainerCallback):
         if is_main:
             self._update_pool(model, loss, state.global_step)
 
-        # Deteksi overfitting
+        self._loss_history.append(loss)
+
+        # Deteksi overfitting: threshold + counter (seperti sebelumnya) DAN
+        # slope regresi positif (loss benar-benar tren naik, bukan noise).
         if not is_new_best and loss > self.best_loss * (1 + self.overfit_threshold):
             self.overfit_counter += 1
+            slope = self._recent_slope()
             print(
                 f"[soup] overfit signal #{self.overfit_counter}/{self.overfit_patience}: "
                 f"loss={loss:.4f} > best={self.best_loss:.4f} "
-                f"(+{(loss / self.best_loss - 1) * 100:.1f}%)",
+                f"(+{(loss / self.best_loss - 1) * 100:.1f}%, slope={slope:+.4f})",
                 flush=True,
             )
-            if self.overfit_counter >= self.overfit_patience:
-                print("[soup] overfit dikonfirmasi, training dihentikan lebih awal", flush=True)
-                control.should_training_stop = True
+            if self.overfit_counter >= self.overfit_patience and slope > 0:
+                if not self._rollback_done:
+                    # Kesempatan kedua: restore best dari pool, LR dipotong,
+                    # NEFTune dinaikkan → lanjut training dengan regularisasi
+                    # lebih kuat, alih-alih membuang sisa waktu.
+                    print("[soup] overfit dikonfirmasi → ROLLBACK + potong LR", flush=True)
+                    self._rollback_to_pool_best(model)
+                    self._cut_lr(_ROLLBACK_LR_FACTOR)
+                    self._bump_neftune(model)
+                    self._rollback_done = True
+                    self.overfit_counter = 0
+                    self._loss_history.clear()
+                else:
+                    print(
+                        "[soup] overfit kedua setelah rollback, "
+                        "training dihentikan lebih awal",
+                        flush=True,
+                    )
+                    control.should_training_stop = True
         else:
             self.overfit_counter = 0
 
