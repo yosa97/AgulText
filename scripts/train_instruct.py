@@ -715,6 +715,15 @@ def main():
                 training_args.num_train_epochs = float(_planned_epochs)
                 # Recompute warmup dengan horizon step yang baru
                 _new_total = total_steps_per_epoch * _planned_epochs
+                # KRITIS: _eval_callback dibuat sebelum epoch planning dengan
+                # total_steps_all_epochs berbasis 999 epoch. Callback menghitung
+                # steps_per_epoch = total_steps_all_epochs / num_train_epochs —
+                # jika total tidak di-update, ambang eval-skip membengkak
+                # (19980/6=3330) dan eval TIDAK PERNAH jalan → best checkpoint
+                # tidak pernah dipilih (bug ditemukan di test 27 Jul).
+                _eval_callback.total_steps_all_epochs = _new_total
+                total_steps_all_epochs = _new_total
+                log_info(f"[epoch_plan] eval_callback.total_steps_all_epochs → {_new_total}")
                 _new_warmup = max(10, min(100, int(_new_total * 0.05)))
                 if _new_warmup != training_args.warmup_steps:
                     log_info(
