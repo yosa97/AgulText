@@ -604,9 +604,16 @@ def main():
     # NEFTune: tambahkan noise ke embedding saat training → generalisasi lebih baik.
     # Alpha=1 default (winner selalu pakai ini); naik ke 5 jika dataset noisy
     # (gradient_noise_scale > 1.0 dari baseline_stats yang disediakan validator).
+    # PENTING: neftune_noise_alpha adalah field TrainingArguments, BUKAN kwarg
+    # Trainer.__init__ — di-set via training_args (guard hasattr untuk
+    # kompatibilitas versi transformers lama).
     _grad_noise = float(_baseline_stats.get("gradient_noise_scale", 0.0))
     _neftune_alpha = 5.0 if _grad_noise > 1.0 else 1.0
-    log_info(f"[neftune] alpha={_neftune_alpha} (gradient_noise_scale={_grad_noise:.3f})")
+    if hasattr(training_args, "neftune_noise_alpha"):
+        training_args.neftune_noise_alpha = _neftune_alpha
+        log_info(f"[neftune] alpha={_neftune_alpha} (gradient_noise_scale={_grad_noise:.3f})")
+    else:
+        log_info("[neftune] TrainingArguments tidak punya neftune_noise_alpha, skip")
 
     # Gunakan KLRegularizedTrainer saat KL aktif.
     # Fallback ke Trainer biasa kalau kl_coef == 0 (identik, tanpa overhead).
@@ -621,7 +628,6 @@ def main():
             kl_coef=kl_coef,
             ref_model=_kl_ref_model,          # None untuk LoRA, frozen copy untuk full-FT
             use_lora=bool(training_args.use_lora),
-            neftune_noise_alpha=_neftune_alpha,
             callbacks=[_eval_callback, _soup_cb],
         )
     else:
@@ -631,7 +637,6 @@ def main():
             args=training_args,
             train_dataset=train_ds,
             eval_dataset=dev_ds,
-            neftune_noise_alpha=_neftune_alpha,
             callbacks=[_eval_callback, _soup_cb],
         )
 

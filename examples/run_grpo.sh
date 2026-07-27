@@ -37,6 +37,51 @@ mkdir -p "$CACHE_DIR/models" "$CACHE_DIR/datasets" "$CACHE_DIR/wandb_logs"
 mkdir -p "$CACHE_DIR/checkpoints"
 
 DATASET_PATH="$CACHE_DIR/datasets/${TASK_ID}_train_data.json"
+
+# N_SAMPLES: 3000 default — disamakan dengan run_instruct.sh / run_dpo.sh.
+# Prompt diambil dari instruksi Stanford Alpaca. Fallback: 80 prompt math inline.
+N_SAMPLES="${N_SAMPLES:-3000}"
+echo ">>> Mengunduh ${N_SAMPLES} prompt dari Stanford Alpaca..."
+set +e
+python3 << PYEOF
+import json, urllib.request, sys
+
+URL = "https://raw.githubusercontent.com/tatsu-lab/stanford_alpaca/main/alpaca_data.json"
+DATASET_PATH = "$DATASET_PATH"
+N_TARGET = int("$N_SAMPLES")
+
+try:
+    req = urllib.request.Request(URL, headers={"User-Agent": "python/3"})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        raw = json.loads(r.read().decode("utf-8"))
+
+    samples = []
+    for item in raw:
+        instr = item.get("instruction", "").strip()
+        inp   = item.get("input", "").strip()
+        if not instr:
+            continue
+        prompt = f"{instr}\n\n{inp}" if inp else instr
+        samples.append({"prompt": prompt})
+        if len(samples) >= N_TARGET:
+            break
+
+    with open(DATASET_PATH, "w", encoding="utf-8") as f:
+        json.dump(samples, f, ensure_ascii=False)
+    print(f"Download berhasil: {len(samples)} prompts dari Stanford Alpaca")
+    sys.exit(0)
+
+except Exception as e:
+    print(f"Download gagal: {e}", file=sys.stderr)
+    sys.exit(1)
+PYEOF
+DOWNLOAD_ALPACA=$?
+set -e
+
+if [ $DOWNLOAD_ALPACA -eq 0 ]; then
+    : # dataset dari Alpaca sudah tertulis
+else
+echo ">>> PERINGATAN: Download gagal. Menggunakan 80 prompt math inline."
 # 80 math/reasoning prompts unik — tanpa repetisi.
 # Reward function mendeteksi angka di output, jadi cukup gunakan soal numerik beragam.
 cat > "$DATASET_PATH" << 'EOF'
@@ -120,6 +165,8 @@ cat > "$DATASET_PATH" << 'EOF'
   {"prompt": "Berapa hasil dari (100 dikali 5) ditambah (200 dikali 3)? Jawab dengan angka saja."}
 ]
 EOF
+fi
+
 DATASET_N=$(python3 -c "import json; d=json.load(open('$DATASET_PATH')); print(len(d))")
 echo ">>> Dataset siap: $DATASET_N entries unik (tidak ada repetisi)"
 

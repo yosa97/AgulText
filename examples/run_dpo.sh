@@ -38,15 +38,19 @@ mkdir -p "$CACHE_DIR/checkpoints"
 
 DATASET_PATH="$CACHE_DIR/datasets/${TASK_ID}_train_data.json"
 
-echo ">>> Mengunduh dataset DPO dari Stanford Alpaca (~500 preference pairs panjang)..."
+# N_SAMPLES: 3000 default — disamakan dengan run_instruct.sh agar fitur adaptif
+# (batch planning, epoch handling) teruji pada skala data realistis.
+N_SAMPLES="${N_SAMPLES:-3000}"
+echo ">>> Mengunduh dataset DPO dari Stanford Alpaca (~${N_SAMPLES} preference pairs)..."
 python3 << PYEOF
 import json, urllib.request, sys
 
 URL = "https://raw.githubusercontent.com/tatsu-lab/stanford_alpaca/main/alpaca_data.json"
 DATASET_PATH = "$DATASET_PATH"
-N_TARGET = 500
-# Filter output >= 500 karakter agar chosen response punya konten substansial
-MIN_OUT_CHARS = 500
+N_TARGET = int("$N_SAMPLES")
+# Filter output >= 400 karakter agar chosen response punya konten substansial
+# tapi masih menyisakan ribuan sampel yang lolos
+MIN_OUT_CHARS = 400
 
 # Rejected responses: sengaja vague/tidak membantu untuk sinyal DPO yang jelas
 BAD_RESPONSES = [

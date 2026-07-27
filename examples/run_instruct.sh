@@ -60,15 +60,19 @@ mkdir -p "$CACHE_DIR/checkpoints"
 # Fallback ke dataset inline 20 entries jika tidak ada koneksi internet.
 DATASET_PATH="$CACHE_DIR/datasets/${TASK_ID}_train_data.json"
 
-echo ">>> Mengunduh dataset Stanford Alpaca (~500 entries, format mirip tournament: field 'instruct'+'input'+'output')..."
+# N_SAMPLES: 3000 default — cukup besar agar LR range test (butuh >= 12 batch)
+# dan epoch planning benar-benar teruji. Override: N_SAMPLES=500 bash examples/run_instruct.sh
+N_SAMPLES="${N_SAMPLES:-3000}"
+echo ">>> Mengunduh dataset Stanford Alpaca (~${N_SAMPLES} entries, format mirip tournament: field 'instruct'+'input'+'output')..."
 python3 << PYEOF
 import json, urllib.request, sys
 
 URL = "https://raw.githubusercontent.com/tatsu-lab/stanford_alpaca/main/alpaca_data.json"
 DATASET_PATH = "$DATASET_PATH"
-N_TARGET = 500
-# Filter output >= 800 karakter agar mirip panjang data tournament nyata
-MIN_OUT_CHARS = 800
+N_TARGET = int("$N_SAMPLES")
+# Filter output >= 400 karakter — cukup substansial tapi masih menyisakan
+# ribuan sampel yang lolos filter (>= 800 hanya menyisakan ~600-an)
+MIN_OUT_CHARS = 400
 
 try:
     req = urllib.request.Request(URL, headers={"User-Agent": "python/3"})
@@ -401,6 +405,16 @@ grep -qE "\[final_dev\] (mulai|dilewati)" "$FULL_LOG" \
     && _check "final_dev_train dipanggil" "ok" "" \
     || _check "final_dev_train dipanggil" "fail" "tidak ada '[final_dev]' — mungkin exception sebelum dipanggil"
 
+# 14. LR range test dipanggil (jalan penuh ATAU skip dengan alasan — keduanya valid)
+grep -qE "\[lr_range\] (mulai|skip|selesai)" "$FULL_LOG" \
+    && _check "LR range test dipanggil" "ok" "" \
+    || _check "LR range test dipanggil" "fail" "tidak ada '[lr_range]' — mungkin exception sebelum dipanggil"
+
+# 15. NEFTune ter-set di TrainingArguments
+grep -q "\[neftune\] alpha=" "$FULL_LOG" \
+    && _check "NEFTune alpha ter-set" "ok" "" \
+    || _check "NEFTune alpha ter-set" "fail" "tidak ada '[neftune] alpha=' di log"
+
 echo ""
 echo "  Total: $PASS lulus, $FAIL gagal"
 echo "════════════════════════════════════════════════════════"
@@ -457,9 +471,26 @@ if [ -n "$SOUP_END" ]; then
 fi
 
 # Tampilkan status final_dev_train
-FDEV_LINE=$(grep -E "\[final_dev\] (selesai|dilewati|mulai)" "$FULL_LOG" | tail -1 || true)
+FDEV_LINE=$(grep -E "\[final_dev\] (selesai|dilewati|mulai|blend)" "$FULL_LOG" | tail -2 || true)
 if [ -n "$FDEV_LINE" ]; then
-    echo "Final dev pass: $FDEV_LINE"
+    echo "Final dev pass:"
+    echo "$FDEV_LINE" | sed 's/^/  /'
+    echo ""
+fi
+
+# Tampilkan hasil LR range test
+LRR_LINES=$(grep "\[lr_range\]" "$FULL_LOG" | head -4 || true)
+if [ -n "$LRR_LINES" ]; then
+    echo "Cuplikan LR range test:"
+    echo "$LRR_LINES" | sed 's/^/  /'
+    echo ""
+fi
+
+# Tampilkan hasil epoch planning
+EP_LINES=$(grep "\[epoch_plan\]" "$FULL_LOG" | head -3 || true)
+if [ -n "$EP_LINES" ]; then
+    echo "Cuplikan epoch planning:"
+    echo "$EP_LINES" | sed 's/^/  /'
     echo ""
 fi
 
