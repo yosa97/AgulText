@@ -215,7 +215,14 @@ def main():
     else:
         model_class = transformers.AutoModelForCausalLM
 
-    model = model_class.from_pretrained(train_request["model_path"], **model_kwargs)
+    # Fallback trust_remote_code untuk model custom-arch (mis. seed quasar)
+    try:
+        model = model_class.from_pretrained(train_request["model_path"], **model_kwargs)
+    except Exception as _le:
+        log_info(f"[load] load standar gagal ({type(_le).__name__}), retry trust_remote_code=True")
+        model = model_class.from_pretrained(
+            train_request["model_path"], trust_remote_code=True, **model_kwargs
+        )
     if len(training_args.fsdp) > 0 or is_deepspeed_zero3_enabled():
         # set gradient checkpointing to True with use_reentrant=True for deepspeed
         log_info("Setting gradient checkpointing to True with use_reentrant=True for deepspeed")

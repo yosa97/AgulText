@@ -102,10 +102,8 @@ def _load_kl_ref_model(model_path: str, training_args, device: torch.device):
     attn = "flash_attention_2" if not training_args.disable_fa else "eager"
     if training_args.use_attn_implementation:
         attn = training_args.use_attn_implementation
-    ref = transformers.AutoModelForCausalLM.from_pretrained(
-        model_path,
-        torch_dtype=torch.bfloat16,
-        attn_implementation=attn,
+    ref = _from_pretrained_with_fallback(
+        transformers.AutoModelForCausalLM, model_path, attn
     )
     ref.to(device)
     ref.eval()
@@ -236,10 +234,10 @@ def load_lora_model(training_args: TrainingArguments, model_path: str, lora_args
     else:
         model_class = transformers.AutoModelForCausalLM
 
-    model = model_class.from_pretrained(
+    model = _from_pretrained_with_fallback(
+        model_class,
         model_path,
-        attn_implementation="flash_attention_2" if not training_args.disable_fa else "eager",
-        torch_dtype=torch.bfloat16,
+        "flash_attention_2" if not training_args.disable_fa else "eager",
         quantization_config=(
             BitsAndBytesConfig(
                 load_in_4bit=True,
@@ -290,27 +288,65 @@ def load_lora_model(training_args: TrainingArguments, model_path: str, lora_args
     return model
 
 
+def _from_pretrained_with_fallback(model_class, model_path: str, attn_implementation: str, **extra):
+    """Muat model dengan rantai fallback untuk arsitektur custom.
+
+    Urutan percobaan:
+      1. Standar (tanpa trust_remote_code) + attn pilihan — jalur normal 99% model.
+      2. trust_remote_code=True + attn pilihan — model custom-arch (mis. seed
+         quasar continuous-SFT yang menyertakan modeling *.py sendiri).
+      3. trust_remote_code=True + attn eager — kalau implementasi custom tidak
+         mendukung flash_attention_2.
+    Diperlukan sejak boss round memakai lineage quasar (custom architecture);
+    tanpa ini load_model crash dan task langsung gagal.
+    """
+    try:
+        return model_class.from_pretrained(
+            model_path,
+            torch_dtype=torch.bfloat16,
+            attn_implementation=attn_implementation,
+            **extra,
+        )
+    except Exception as e1:
+        log_info(f"[load] load standar gagal ({type(e1).__name__}), coba trust_remote_code=True")
+    try:
+        return model_class.from_pretrained(
+            model_path,
+            torch_dtype=torch.bfloat16,
+            attn_implementation=attn_implementation,
+            trust_remote_code=True,
+            **extra,
+        )
+    except Exception as e2:
+        log_info(
+            f"[load] trust_remote_code + {attn_implementation} gagal "
+            f"({type(e2).__name__}), coba attn=eager"
+        )
+    return model_class.from_pretrained(
+        model_path,
+        torch_dtype=torch.bfloat16,
+        attn_implementation="eager",
+        trust_remote_code=True,
+        **extra,
+    )
+
+
 def load_model(training_args: TrainingArguments, model_path: str, token_nums: int):
     model_class = transformers.AutoModelForCausalLM
-    
+
     if training_args.use_liger:
         from liger_kernel.transformers import AutoLigerKernelForCausalLM
 
         log_info("---------------using LIGER------------")
         model_class = AutoLigerKernelForCausalLM
-    
+
     attn_implementation="flash_attention_2" if not training_args.disable_fa else "eager"
     if training_args.use_attn_implementation:
         attn_implementation = training_args.use_attn_implementation
         log_info(f"Using {attn_implementation} as the attention implementation")
     log_info(f"Using attn_implementation: {attn_implementation}")
-    
-    model = model_class.from_pretrained(
-        model_path,
-        # trust_remote_code=True, remove this because we already filter the model architecture, it will not be used with liger-kernel 
-        torch_dtype=torch.bfloat16,
-        attn_implementation=attn_implementation,
-    )
+
+    model = _from_pretrained_with_fallback(model_class, model_path, attn_implementation)
     # model.resize_token_embeddings(token_nums)
     return model
 

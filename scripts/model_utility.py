@@ -28,13 +28,22 @@ hf_api = HfApi()
 
 
 def get_model_architecture(model_path: str) -> str:
+    # Coba tanpa remote code dulu (mayoritas model); fallback ke
+    # trust_remote_code=True untuk model custom-arch seperti seed quasar
+    # continuous-SFT. Membaca config saja — tidak mengeksekusi kode model.
     try:
         config = AutoConfig.from_pretrained(model_path)
+    except Exception:
+        try:
+            config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+        except Exception:
+            return "Unknown"
+    try:
         architectures = config.architectures
         if len(architectures) > 1:
             return "Multiple architectures"
         return architectures[0].strip().lower()
-    except:
+    except Exception:
         return "Unknown"
 
 

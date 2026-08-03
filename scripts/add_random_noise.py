@@ -20,7 +20,15 @@ def main(model_path: str, save_folder: str, task_id: Optional[str] = None, noise
     noise_std: standard deviation of noise. Use small values (e.g. 0.0008) for
                trained models and larger (e.g. 0.01) for fallback (untrained) models.
     """
-    model = AutoModelForCausalLM.from_pretrained(model_path, torch_dtype=torch.bfloat16, device_map="auto")
+    # Fallback trust_remote_code untuk model custom-arch (mis. seed quasar).
+    # Tanpa ini, failure-path pun crash → tidak ada submission sama sekali.
+    try:
+        model = AutoModelForCausalLM.from_pretrained(model_path, torch_dtype=torch.bfloat16, device_map="auto")
+    except Exception as _e:
+        print(f"Load standar gagal ({type(_e).__name__}), retry trust_remote_code=True", flush=True)
+        model = AutoModelForCausalLM.from_pretrained(
+            model_path, torch_dtype=torch.bfloat16, device_map="auto", trust_remote_code=True
+        )
     model.generation_config = GenerationConfig(temperature=None, top_p=None)
     tokenizer = safe_load_tokenizer(model_path)
 
