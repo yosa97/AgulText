@@ -210,7 +210,12 @@ def run_lr_range_test(
             steps_done += 1
             lr_cur *= mult
     except Exception as e:
-        log(f"[lr_range] error saat ramp ({e}) — bobot di-restore, pakai base_lr")
+        import traceback as _tb
+        log(
+            f"[lr_range] error saat ramp ({type(e).__name__}: {e!r}) — "
+            f"bobot di-restore, pakai base_lr"
+        )
+        log("[lr_range] traceback:\n" + _tb.format_exc())
     finally:
         # SELALU restore bobot awal, apapun yang terjadi
         opt.zero_grad(set_to_none=True)

@@ -144,7 +144,14 @@ def pack_data_points_FA(
         label_ids = [-100 for _ in range(pad_leng)] + label_ids
         attention_mask = [0 for _ in range(pad_leng)] + attention_mask
 
-    assert len(input_ids) == len(label_ids) == len(attention_mask) == model_max_length
+    # Bukan bare-assert lagi: pesan kosong menyulitkan debugging di tournament
+    if pad_leng < 0 or not (
+        len(input_ids) == len(label_ids) == len(attention_mask) == model_max_length
+    ):
+        raise ValueError(
+            f"pack overflow/mismatch: total_token={len(input_ids)} vs "
+            f"model_max_length={model_max_length} (panjang per-item: {lengths})"
+        )
     return {
         "input_ids": torch.tensor(input_ids),
         "labels": torch.tensor(label_ids),
@@ -262,12 +269,40 @@ class PackedDataset(Dataset):
         self.lengths = []
         self.data_points = []
         size = len(dataset.eval_dataset)
+        # ── Guard kritis: sampel lebih panjang dari pack_length ──────────────
+        # PackedDataset membaca item MENTAH (bypass truncation MyDataset).
+        # Sejak max_length adaptif (p90 dari seq_analyzer), bisa ada sampel
+        # mentah > pack_length → pad_leng negatif di pack_data_points_FA →
+        # AssertionError kosong → SEMUA attempt training crash (root cause
+        # kegagalan tournament 3 Agu: dataset besar → packing aktif → crash).
+        # Solusi: potong ke pack_length; jika tidak ada label tersisa setelah
+        # dipotong (completion habis terpotong), buang sampel agar tidak
+        # menghasilkan pack ber-loss NaN.
+        n_trunc = 0
+        n_drop = 0
         for i in range(size):
             dp = dataset.eval_dataset[i]
             input_length = len(dp["input_ids"])
             assert input_length == len(dp["attention_mask"]) == len(dp["labels"])
+            if input_length > self.pack_length:
+                dp = {
+                    "input_ids": list(dp["input_ids"])[: self.pack_length],
+                    "attention_mask": list(dp["attention_mask"])[: self.pack_length],
+                    "labels": list(dp["labels"])[: self.pack_length],
+                }
+                if all(_l == -100 for _l in dp["labels"]):
+                    n_drop += 1
+                    continue
+                n_trunc += 1
+                input_length = self.pack_length
             self.data_points.append(dp)
             self.lengths.append(input_length)
+        if n_trunc or n_drop:
+            print(
+                f"[PackedDataset] guard panjang: {n_trunc} sampel dipotong ke "
+                f"pack_length={self.pack_length}, {n_drop} dibuang (label habis)",
+                flush=True,
+            )
         self.groups =  pack_with_min_item_num(
             self.lengths, self.pack_length, min_item_num
         )
