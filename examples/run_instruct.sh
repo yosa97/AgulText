@@ -215,6 +215,23 @@ fi
 DATASET_N=$(python3 -c "import json; d=json.load(open('$DATASET_PATH')); print(len(d))")
 echo ">>> Dataset siap: $DATASET_N entries unik (tidak ada repetisi)"
 
+# ── Simulasi kondisi tournament: BASELINE_STATS_PATH ──────────────────────
+# Validator SELALU men-set env var ini di tournament; test lokal sebelumnya
+# tidak pernah — sehingga jalur kode pembacanya tidak pernah teruji.
+# Sertakan nilai "nakal" (null, string) untuk menguji parsing defensif.
+BASELINE_STATS_FILE="$CACHE_DIR/datasets/baseline_stats_test.json"
+cat > "$BASELINE_STATS_FILE" << 'BSEOF'
+{
+  "task_type": "InstructTextTask",
+  "gradient_noise_scale": null,
+  "near_duplicate_rate": 0.02,
+  "prompt_tokens": 120000,
+  "completion_tokens": 340000,
+  "seq_length_distribution": {"p50": 180, "p90": 420, "p99": 900}
+}
+BSEOF
+echo ">>> Simulasi BASELINE_STATS_PATH aktif (dengan nilai null yang menguji parsing)"
+
 # Dataset type mirip tournament: field_instruction="instruct", field_input="input",
 # field_output="output". format dan no_input_format dibiarkan null (tidak di-set)
 # agar trainer pakai default — sama seperti yang dikirim validator tournament nyata.
@@ -256,6 +273,7 @@ docker run --rm \
     -v "$CACHE_DIR/soutputs:/workspace/scripts/soutputs" \
     -v "$CACHE_DIR/wandb_logs_run:/cache/wandb_logs" \
     -e WANDB_MODE=offline \
+    -e BASELINE_STATS_PATH=/cache/datasets/baseline_stats_test.json \
     -e HF_HUB_ENABLE_HF_TRANSFER=1 \
     -e TASK_ID="$TASK_ID" \
     -e MODEL="$MODEL" \

@@ -643,7 +643,13 @@ def main():
     # PENTING: neftune_noise_alpha adalah field TrainingArguments, BUKAN kwarg
     # Trainer.__init__ — di-set via training_args (guard hasattr untuk
     # kompatibilitas versi transformers lama).
-    _grad_noise = float(_baseline_stats.get("gradient_noise_scale", 0.0))
+    # Parse defensif: nilai bisa null/string/absen di JSON validator — float(None)
+    # melempar TypeError yang membunuh SEMUA attempt (tidak pernah terjadi di
+    # test lokal karena BASELINE_STATS_PATH tidak pernah di-set).
+    try:
+        _grad_noise = float(_baseline_stats.get("gradient_noise_scale") or 0.0)
+    except (TypeError, ValueError):
+        _grad_noise = 0.0
     _neftune_alpha = 5.0 if _grad_noise > 1.0 else 1.0
     if hasattr(training_args, "neftune_noise_alpha"):
         training_args.neftune_noise_alpha = _neftune_alpha

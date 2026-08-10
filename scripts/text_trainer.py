@@ -467,7 +467,12 @@ def main():
     # USE_KL=1 means the scorer will add KL_COEF * KL(model || base) to eval loss,
     # so we must match that objective during training via KLRegularizedTrainer.
     _use_kl = os.getenv("USE_KL", "0") == "1"
-    _kl_coef = float(os.getenv("KL_COEF", "0.0")) if _use_kl else 0.0
+    # Parse defensif: KL_COEF bisa berupa string kosong → float("") crash saat
+    # startup untuk task KL. Fallback 0.1 (nilai lazim) bila tidak valid.
+    try:
+        _kl_coef = float(os.getenv("KL_COEF") or 0.0) if _use_kl else 0.0
+    except (TypeError, ValueError):
+        _kl_coef = 0.1 if _use_kl else 0.0
     if _use_kl:
         print(f"[text_trainer] KL task detected: USE_KL=1, KL_COEF={_kl_coef}", flush=True)
 
