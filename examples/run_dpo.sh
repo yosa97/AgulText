@@ -242,7 +242,7 @@ grep -q "Training successfully done" "$FULL_LOG" \
     || _check "loss.txt ada (eval loss tercatat)" "fail" "tidak ada loss.txt — training gagal sebelum eval"
 
 # 4. Submission dir berisi model
-FILE_COUNT=$(ls "$SUBMIT_DIR" 2>/dev/null | wc -l || echo 0)
+FILE_COUNT=$(find "$SUBMIT_DIR" -maxdepth 1 -type f 2>/dev/null | wc -l); FILE_COUNT=${FILE_COUNT//[^0-9]/}; FILE_COUNT=${FILE_COUNT:-0}
 [ "$FILE_COUNT" -ge 2 ] \
     && _check "Submission dir berisi model ($FILE_COUNT files)" "ok" "" \
     || _check "Submission dir berisi model" "fail" "hanya $FILE_COUNT file di $SUBMIT_DIR"
@@ -253,7 +253,8 @@ FILE_COUNT=$(ls "$SUBMIT_DIR" 2>/dev/null | wc -l || echo 0)
     || _check "config.json ada di submission" "fail" "tidak ada config.json"
 
 # 6. ModelSoupCallback aktif (soup terintegrasi di train_dpo.py)
-grep -q "\[soup\] siap:" "$FULL_LOG" \
+# Output train_dpo masuk ke log internal, bukan stdout container — cek keduanya
+grep -q "\[soup\] siap:" "$FULL_LOG" "$CACHE_DIR/internal_datasets/train_${TASK_ID}.log" 2>/dev/null \
     && _check "ModelSoupCallback (DPO) aktif" "ok" "" \
     || _check "ModelSoupCallback (DPO) aktif" "fail" "tidak ada '[soup] siap:' — soup_callback tidak ter-load"
 
@@ -286,7 +287,7 @@ if [ -n "$SOUP_END" ]; then
     echo ""
 fi
 
-FILE_COUNT=$(ls "$SUBMIT_DIR" 2>/dev/null | wc -l || echo 0)
+FILE_COUNT=$(find "$SUBMIT_DIR" -maxdepth 1 -type f 2>/dev/null | wc -l); FILE_COUNT=${FILE_COUNT//[^0-9]/}; FILE_COUNT=${FILE_COUNT:-0}
 if [ -n "$HF_REPO" ] && grep -q "Upload selesai:" "$FULL_LOG" 2>/dev/null; then
     echo "✓ Model terupload → https://huggingface.co/$HF_REPO"
 elif [ -n "$HF_REPO" ] && [ "$DOCKER_EXIT" -eq 0 ]; then
