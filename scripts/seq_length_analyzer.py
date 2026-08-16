@@ -103,8 +103,16 @@ def compute_adaptive_max_length(
     p99 = _percentile(lengths, 0.99)
     mean_len = sum(lengths) // n
 
-    # Select target percentile based on packing strategy
-    raw_target = p90 if packing else p95
+    # Select target percentile based on packing strategy.
+    # PACKING ON: gunakan p99 + margin 10%, BUKAN p90. Dengan p90, ~10% sampel
+    # lebih panjang dari pack_length → dipotong/dibuang oleh guard PackedDataset
+    # → kehilangan data ekor (jawaban panjang) yang justru sering muncul di test
+    # set → eval loss memburuk. p99×1.1 menyisakan <1% terdampak; kepadatan
+    # packing minimal 2 sampel/blok dijaga lewat floor 2×p50.
+    if packing:
+        raw_target = int(max(p99, 2 * p50) * 1.1)
+    else:
+        raw_target = p95
 
     # Round up to nearest 64
     aligned = ((raw_target + 63) // 64) * 64

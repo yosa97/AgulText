@@ -49,21 +49,21 @@ INSTRUCT_CONFIG = {
         "lr": 7e-5,
         "distributed": "ddp",
         "gpu_count": 2,
-        # LoRA diaktifkan untuk mencegah OOM pada dataset sekuens panjang (max_length=2048).
-        # Full fine-tuning 4-5B dengan batch_size=40 bisa mencapai ~75 GB per GPU jika
-        # seq panjang — terlalu dekat batas 80 GB. LoRA + batch_size=28 memberi headroom
-        # yang cukup sambil tetap memberikan kualitas fine-tuning yang baik.
-        "use_lora": True,
-        "batch_size": 28,
+        # FULL fine-tune (bukan LoRA): kualitas lebih baik, dan aman dari OOM
+        # karena max_length adaptif (p99×1.1) + jaring pengaman retry-ladder
+        # (batch dibelah dua per attempt OOM, lalu max_length diturunkan).
+        "use_lora": False,
+        "batch_size": 40,
     },
     "5_9_b": {
         "lr": 3.5e-5,
         "distributed": "ddp",
         "gpu_count": 2,
-        # LoRA diaktifkan untuk mencegah OOM pada GPU tournament (full fine-tuning
-        # 8-9B butuh ~40GB+ per GPU dengan DDP; LoRA mengurangi kebutuhan VRAM
-        # secara signifikan sehingga training tidak crash dan tidak jatuh ke failure path).
-        "use_lora": True,
+        # FULL fine-tune 5-9B di 2×H100: muat dengan paged_adamw_8bit +
+        # gradient checkpointing + max_length adaptif. LoRA sebelumnya
+        # mengorbankan kualitas — ini gap skor terbesar vs kompetitor di
+        # task model menengah (7-8B, ukuran paling umum di tournament).
+        "use_lora": False,
         "batch_size": 28,
     },
     "9_12_b": {
