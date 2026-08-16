@@ -118,6 +118,22 @@ def run_lr_range_test(
     model = trainer.model
     device = next(_unwrap(model).parameters()).device
 
+    # ── Samakan profil memori dengan training ────────────────────────────────
+    # Probe berjalan SEBELUM trainer.train(); HF Trainer baru mengaktifkan
+    # gradient checkpointing di dalam train(). Tanpa ini, aktivasi full-graph
+    # untuk batch penuh OOM di model >~1B (terbukti: 1.7B × bs100 × 512 token
+    # = 79GB). enable_input_require_grads sudah dipanggil saat load model.
+    if getattr(trainer.args, "gradient_checkpointing", False):
+        try:
+            _um = _unwrap(model)
+            if hasattr(_um, "gradient_checkpointing_enable") and not getattr(
+                _um, "is_gradient_checkpointing", False
+            ):
+                _um.gradient_checkpointing_enable()
+                log("[lr_range] gradient checkpointing diaktifkan untuk probe")
+        except Exception as _gc_err:
+            log(f"[lr_range] gagal aktifkan grad checkpointing ({_gc_err}), lanjut")
+
     try:
         loader = trainer.get_train_dataloader()
     except Exception as e:
