@@ -539,6 +539,24 @@ def main():
         f"train_request={train_request.get('kl_coef', 0.0)})"
     )
 
+    # ── Mitigasi OOM jalur KL ────────────────────────────────────────────────
+    # KL membutuhkan logits penuh dari DUA model (utama + referensi) — tanpa KL,
+    # liger fused-CE menghindari materialisasi logits. Vocab besar (Qwen 152k)
+    # × batch × seq_len menggandakan kebutuhan VRAM → attempt pertama OOM
+    # (terbukti di test 16 Agu: bs140 crash, retry bs35 sukses). Proaktif:
+    # belah batch + gandakan grad_accum → effective batch tetap, logits separuh.
+    if kl_coef > 0.0 and training_args.per_device_train_batch_size > 1:
+        _kl_old_bs = training_args.per_device_train_batch_size
+        training_args.per_device_train_batch_size = max(1, _kl_old_bs // 2)
+        training_args.gradient_accumulation_steps = (
+            training_args.gradient_accumulation_steps * 2
+        )
+        log_info(
+            f"[kl] batch {_kl_old_bs} → {training_args.per_device_train_batch_size}, "
+            f"grad_accum → {training_args.gradient_accumulation_steps} "
+            f"(effective batch tetap; hindari OOM logits ganda)"
+        )
+
     # Check if this is the main process and create the output directory
     if is_main_process(LOCAL_RANK):  # Only create directory on main process
         os.makedirs(training_args.output_dir, exist_ok=True)
