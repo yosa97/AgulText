@@ -193,22 +193,37 @@ class KLRegularizedTrainer(Trainer):
             return (ce_loss, outputs) if return_outputs else ce_loss
 
         # KL(P_ft || P_base) pada completion tokens (unshifted — sesuai evaluator)
+        #
+        # SUBSAMPLING STOKASTIK (mitigasi OOM, 16 Agu): log-softmax float32 untuk
+        # SEMUA completion token × dua model = O(N × vocab) fp32 — pada vocab
+        # besar (Qwen 152k) ini puluhan GB dan menyebabkan attempt pertama OOM.
+        # Solusi: sampel acak maks _MAX_KL_TOKENS token per batch. Rata-rata
+        # subsample acak = estimator tak-bias dari rata-rata penuh; noise-nya
+        # dihaluskan lintas step oleh optimizer. Memori jadi KONSTAN berapapun
+        # batch/seq_len. (Pendekatan berbeda dari referensi lain yang memakai
+        # chunking penuh — subsampling lebih sederhana dan lebih hemat.)
+        _MAX_KL_TOKENS = 4096
         mask = labels != -100  # [B, T]
         if mask.any():
-            # Float32 upcast — bf16 terlalu lossy untuk log-softmax di kl_div
-            ft_f32  = logits[mask].float()                                     # [N, V]
-            ref_f32 = self._base_logits(model, input_ids, attention_mask)[mask].float()  # [N, V]
+            ref_logits = self._base_logits(model, input_ids, attention_mask)
+            ft_sel  = logits[mask]       # [N, V] bf16 (grad mengalir)
+            ref_sel = ref_logits[mask]   # [N, V] bf16 (no-grad)
+            del ref_logits
 
-            log_ft   = torch.nn.functional.log_softmax(ft_f32,  dim=-1)   # log P_ft
-            log_base = torch.nn.functional.log_softmax(ref_f32, dim=-1)   # log P_base
+            n_tok = ft_sel.size(0)
+            if n_tok > _MAX_KL_TOKENS:
+                _idx = torch.randperm(n_tok, device=ft_sel.device)[:_MAX_KL_TOKENS]
+                ft_sel, ref_sel = ft_sel[_idx], ref_sel[_idx]
+
+            # Float32 upcast — bf16 terlalu lossy untuk log-softmax di kl_div
+            log_ft   = torch.nn.functional.log_softmax(ft_sel.float(),  dim=-1)
+            log_base = torch.nn.functional.log_softmax(ref_sel.float(), dim=-1)
 
             # kl_div(input=log_Q, target=log_P, log_target=True):
-            #   elemen[i,v] = exp(log_P[i,v]) * (log_P[i,v] - log_Q[i,v])
-            #               = P_ft * (log P_ft - log P_base)
-            # sum per token → [N], mean → scalar
+            #   elemen[i,v] = P_ft * (log P_ft - log P_base)
             kl_per_token = torch.nn.functional.kl_div(
                 log_base, log_ft, reduction="none", log_target=True
-            ).sum(dim=-1)  # [N]
+            ).sum(dim=-1)
             kl_loss = kl_per_token.mean()
         else:
             kl_loss = logits.new_zeros(())
