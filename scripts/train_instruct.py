@@ -560,16 +560,20 @@ def main():
     # × batch × seq_len menggandakan kebutuhan VRAM → attempt pertama OOM
     # (terbukti di test 16 Agu: bs140 crash, retry bs35 sukses). Proaktif:
     # belah batch + gandakan grad_accum → effective batch tetap, logits separuh.
+    # Pembagi 4 (bukan 2): jalur KL tidak bisa memakai liger fused-CE (butuh
+    # logits termaterialisasi), sehingga cross-entropy fp32 pada vocab besar
+    # (152k) memakan ~22GB×2 + logits 11GB + ref-logits 11GB. Empiris 16 Agu:
+    # bs70 masih OOM di H100 80GB, bs35 muat dan sukses.
     if kl_coef > 0.0 and training_args.per_device_train_batch_size > 1:
         _kl_old_bs = training_args.per_device_train_batch_size
-        training_args.per_device_train_batch_size = max(1, _kl_old_bs // 2)
+        training_args.per_device_train_batch_size = max(1, _kl_old_bs // 4)
         training_args.gradient_accumulation_steps = (
-            training_args.gradient_accumulation_steps * 2
+            training_args.gradient_accumulation_steps * 4
         )
         log_info(
             f"[kl] batch {_kl_old_bs} → {training_args.per_device_train_batch_size}, "
             f"grad_accum → {training_args.gradient_accumulation_steps} "
-            f"(effective batch tetap; hindari OOM logits ganda)"
+            f"(effective batch tetap; CE+KL full-logits butuh headroom 4×)"
         )
 
     # Check if this is the main process and create the output directory
