@@ -108,9 +108,60 @@ def verify_tokenizer_health(tokenizer) -> list[str]:
     return issues
 
 
+def _load_fast_tokenizer_directly(model_path: str):
+    """Muat tokenizer.json langsung via PreTrainedTokenizerFast.
+
+    Jalan terakhir untuk arsitektur yang model_type-nya tidak dikenal oleh
+    versi transformers terpasang (kasus nyata: LiquidAI LFM2.5 dengan
+    transformers 4.51 — AutoTokenizer menolak karena 'lfm2' tidak ada di
+    mapping, padahal tokenizer.json-nya standar dan bisa dimuat langsung).
+    Special token diambil dari tokenizer_config.json bila ada.
+    """
+    from transformers import PreTrainedTokenizerFast
+
+    tok_json = os.path.join(model_path, "tokenizer.json")
+    if not os.path.isfile(tok_json):
+        raise FileNotFoundError(f"tokenizer.json tidak ada di {model_path}")
+
+    special_kwargs = {}
+    cfg_path = os.path.join(model_path, "tokenizer_config.json")
+    if os.path.isfile(cfg_path):
+        try:
+            with open(cfg_path) as f:
+                cfg = json.load(f)
+            for key in ("bos_token", "eos_token", "pad_token", "unk_token", "chat_template"):
+                val = cfg.get(key)
+                if isinstance(val, dict):
+                    val = val.get("content")
+                if val is not None:
+                    special_kwargs[key] = val
+            if "model_max_length" in cfg and isinstance(cfg["model_max_length"], (int, float)):
+                special_kwargs["model_max_length"] = int(min(cfg["model_max_length"], 10**9))
+        except Exception as e:
+            print(f"[tokenizer_safe] WARN gagal baca special tokens: {e}", flush=True)
+
+    tok = PreTrainedTokenizerFast(tokenizer_file=tok_json, **special_kwargs)
+    print(
+        f"[tokenizer_safe] fallback PreTrainedTokenizerFast dipakai "
+        f"(vocab={tok.vocab_size}, specials={list(special_kwargs.keys())})",
+        flush=True,
+    )
+    return tok
+
+
 def safe_load_tokenizer(pretrained_model_name_or_path: str, **kwargs):
     """AutoTokenizer.from_pretrained wrapper that sanitizes local model dirs first."""
     sanitize_tokenizer_config(pretrained_model_name_or_path)
-    tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name_or_path, **kwargs)
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name_or_path, **kwargs)
+    except Exception as e:
+        # AutoTokenizer gagal (mis. model_type tidak dikenal versi transformers
+        # ini) → coba muat tokenizer.json langsung, bebas dari model mapping.
+        print(
+            f"[tokenizer_safe] AutoTokenizer gagal ({type(e).__name__}: {e}) — "
+            f"mencoba fallback PreTrainedTokenizerFast",
+            flush=True,
+        )
+        tokenizer = _load_fast_tokenizer_directly(pretrained_model_name_or_path)
     verify_tokenizer_health(tokenizer)
     return tokenizer

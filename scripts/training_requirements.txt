@@ -7,8 +7,12 @@ wandb==0.19.10
 deepspeed==0.15.4
 typer==0.9.0
 tensorboard==2.19.0
-transformers==4.51.3
-liger-kernel==0.5.9
+# transformers 4.55: dukungan arsitektur lfm2 (LiquidAI LFM2/LFM2.5 — task
+# tournament 17 Agu) masuk sejak 4.54; 4.55 dipilih sebagai versi stabil
+# terdekat. liger-kernel ikut naik agar monkeypatch kompatibel dengan
+# internal model 4.55 (0.5.9 dites terhadap era 4.51).
+transformers>=4.55,<4.57
+liger-kernel>=0.5.9,<0.7
 peft==0.15.1
 datasets==3.5.0
 trl==0.18.0
