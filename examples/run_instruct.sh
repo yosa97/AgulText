@@ -63,6 +63,13 @@ DATASET_PATH="$CACHE_DIR/datasets/${TASK_ID}_train_data.json"
 # N_SAMPLES: 3000 default — cukup besar agar LR range test (butuh >= 12 batch)
 # dan epoch planning benar-benar teruji. Override: N_SAMPLES=500 bash examples/run_instruct.sh
 N_SAMPLES="${N_SAMPLES:-3000}"
+# DATASET_URL: jika di-set, pakai dataset task tournament NYATA (URL S3
+# 'training_data' dari JSON task — berlaku 7 hari) alih-alih Alpaca.
+# Untuk kalibrasi head-to-head dengan papan skor via run_evaluation.
+if [ -n "${DATASET_URL:-}" ]; then
+    echo ">>> Mengunduh dataset task tournament nyata dari DATASET_URL..."
+    curl -sL "$DATASET_URL" -o "$DATASET_PATH"
+else
 echo ">>> Mengunduh dataset Stanford Alpaca (~${N_SAMPLES} entries, format mirip tournament: field 'instruct'+'input'+'output')..."
 python3 << PYEOF
 import json, urllib.request, sys
@@ -211,6 +218,7 @@ if [ $DOWNLOAD_ALPACA -ne 0 ]; then
 ]
 EOF
 fi
+fi   # penutup blok DATASET_URL
 
 DATASET_N=$(python3 -c "import json; d=json.load(open('$DATASET_PATH')); print(len(d))")
 echo ">>> Dataset siap: $DATASET_N entries unik (tidak ada repetisi)"
