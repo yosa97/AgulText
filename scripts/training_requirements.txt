@@ -1,4 +1,7 @@
-accelerate==1.6.0
+# accelerate >=1.10 wajib untuk transformers 4.56 (field parallelism_config
+# di TrainingArguments merujuk ParallelismConfig milik accelerate 1.10+;
+# dengan accelerate 1.6 HfArgumentParser crash: NameError ParallelismConfig)
+accelerate>=1.10,<1.11
 bitsandbytes==0.45.4
 scipy==1.15.2
 sentencepiece==0.2.0
