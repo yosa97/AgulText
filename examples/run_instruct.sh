@@ -228,14 +228,14 @@ echo ">>> Dataset siap: $DATASET_N entries unik (tidak ada repetisi)"
 # tidak pernah — sehingga jalur kode pembacanya tidak pernah teruji.
 # Sertakan nilai "nakal" (null, string) untuk menguji parsing defensif.
 BASELINE_STATS_FILE="$CACHE_DIR/datasets/baseline_stats_test.json"
-cat > "$BASELINE_STATS_FILE" << 'BSEOF'
+cat > "$BASELINE_STATS_FILE" << BSEOF
 {
   "task_type": "InstructTextTask",
   "gradient_noise_scale": null,
   "near_duplicate_rate": 0.02,
   "prompt_tokens": 120000,
   "completion_tokens": 340000,
-  "seq_length_distribution": {"p50": 180, "p90": 420, "p99": 900}
+  "seq_length_distribution": {"p50": 180, "p90": 420, "p99": ${BS_P99:-900}}
 }
 BSEOF
 echo ">>> Simulasi BASELINE_STATS_PATH aktif (dengan nilai null yang menguji parsing)"
@@ -284,6 +284,8 @@ docker run --rm \
     -e BASELINE_STATS_PATH=/cache/datasets/baseline_stats_test.json \
     -e USE_KL="${USE_KL:-0}" \
     -e KL_COEF="${KL_COEF:-}" \
+    -e LR_SAFETY_DIV="${LR_SAFETY_DIV:-}" \
+    -e LR_BLEND_W="${LR_BLEND_W:-}" \
     -e HF_HUB_ENABLE_HF_TRANSFER=1 \
     -e TASK_ID="$TASK_ID" \
     -e MODEL="$MODEL" \

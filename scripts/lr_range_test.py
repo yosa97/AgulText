@@ -42,8 +42,20 @@ _MIN_STEPS        = 12     # di bawah ini hasil tidak bermakna → skip
 _SPAN_DECADES     = 2.0    # ramp dari est/10^1 ke est*10^1 (total 2 dekade)
 _EMA_BETA         = 0.75   # smoothing loss
 _DIVERGE_FACTOR   = 2.5    # loss_smooth > factor × best → berhenti dini
-_SAFETY_DIV       = 2.0    # LR dipilih = argmin_loss_lr / safety
-_BLEND_WEIGHT     = 0.5    # bobot geometris hasil test vs estimasi config
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name) or default)
+    except (TypeError, ValueError):
+        return default
+
+
+# Dapat di-override via env untuk kalibrasi A/B dengan evaluator lokal
+# (tournament 24 Agu: tertinggal 10-26% dari cluster → dugaan LR terlalu
+# konservatif; argmin/2 + blend 50% menghasilkan ~setengah LR optimal).
+_SAFETY_DIV       = _env_float("LR_SAFETY_DIV", 2.0)   # LR = argmin_lr / safety
+_BLEND_WEIGHT     = _env_float("LR_BLEND_W", 0.5)      # bobot hasil test vs estimasi
 _MAX_BUDGET_SECS  = 420.0  # hard cap waktu untuk seluruh ramp
 _BUDGET_FRACTION  = 0.06   # atau 6% dari sisa waktu, mana yang lebih kecil
 _MIN_REMAIN_SECS  = 1200.0 # skip kalau sisa waktu < 20 menit

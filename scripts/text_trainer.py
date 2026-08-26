@@ -523,7 +523,30 @@ def main():
     else:
         raise ValueError(f"Task type {args.task_type} not supported")
 
-    
+    # ── Pra-tokenisasi: naikkan sequence_len untuk dataset berdokumen panjang ──
+    # Axolotl MEMBUANG sampel > sequence_len saat tokenisasi (default 2048).
+    # Kasus nyata tournament 24 Agu (clinical notes): sampel panjang terbuang
+    # sebelum seq_analyzer sempat melihatnya → model tidak pernah dilatih pada
+    # data yang menyerupai test set → loss 2.3× winner (0.254 vs 0.111).
+    # Validator menyediakan distribusi panjang di baseline_stats — pakai
+    # p99×1.2 (dibatasi 8192, kelipatan 64) sebagai sequence_len tokenisasi.
+    # seq_analyzer tetap menentukan max_length training FINAL sesudahnya.
+    try:
+        _sd = (baseline_stats or {}).get("seq_length_distribution") or {}
+        _p99 = _sd.get("p99")
+        if _p99 and float(_p99) > 0 and "train_request" in train_info:
+            _tok_len = int(min(8192, max(2048, float(_p99) * 1.2)))
+            _tok_len = ((_tok_len + 63) // 64) * 64
+            if _tok_len > 2048:
+                train_info["train_request"]["max_length"] = _tok_len
+                print(
+                    f"[pre-tokenize] sequence_len tokenisasi dinaikkan ke {_tok_len} "
+                    f"(p99={_p99} dari baseline_stats — sampel panjang TIDAK dibuang)",
+                    flush=True,
+                )
+    except Exception as _pt_err:
+        print(f"[pre-tokenize] dilewati: {_pt_err}", flush=True)
+
     with open(request_path, "w") as f:
         json.dump(train_info, f, indent=4, ensure_ascii=False)
 
