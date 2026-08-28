@@ -593,6 +593,35 @@ def main():
     run_output_dir = output_dir
     train_cmd = replace_args_in_cmd(original_train_cmd, "output_dir", run_output_dir)
 
+    # ── Batch sadar-panjang ──────────────────────────────────────────────────
+    # Tabel batch bracket dikalibrasi untuk seq ~512 token. Pada dataset
+    # berdokumen panjang (clinical notes: max_length 4416), batch 100×4416
+    # token = OOM pasti di attempt pertama → buang waktu + satu nyawa retry
+    # validator. Skala batch turun proporsional terhadap max_length (basis
+    # 768 token), kompensasi grad_accum naik agar effective batch terjaga.
+    try:
+        if adapted_max_length > 768:
+            _bs_old = int(extract_value_from_cmd(train_cmd, "per_device_train_batch_size"))
+            _ga_old = int(extract_value_from_cmd(train_cmd, "gradient_accumulation_steps"))
+            _scale = max(1.0, adapted_max_length / 768.0)
+            _bs_new = max(1, int(_bs_old / _scale))
+            if _bs_new < _bs_old:
+                _ga_new = max(_ga_old, min(64, int(round(_ga_old * _bs_old / _bs_new))))
+                train_cmd = replace_args_in_cmd(
+                    train_cmd, "per_device_train_batch_size", str(_bs_new)
+                )
+                train_cmd = replace_args_in_cmd(
+                    train_cmd, "gradient_accumulation_steps", str(_ga_new)
+                )
+                print(
+                    f"[seq-batch] max_length={adapted_max_length} → batch "
+                    f"{_bs_old}→{_bs_new}, grad_accum {_ga_old}→{_ga_new} "
+                    f"(token/step ≈ konstan, hindari OOM attempt-1)",
+                    flush=True,
+                )
+    except Exception as _sb_err:
+        print(f"[seq-batch] dilewati: {_sb_err}", flush=True)
+
     current_request_path = os.path.join(
         ds_folder, f"training_request_{args.task_id}_run.json"
     )
