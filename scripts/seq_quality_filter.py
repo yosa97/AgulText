@@ -263,3 +263,46 @@ def run_quality_filter(
             print(f"[seq_quality] debug save gagal: {e}", flush=True)
 
     return iqr_filter(after_dedup, losses, k=k_iqr, min_samples=min_for_filter)
+
+
+def stride_unmask_prompt(samples: list, plw: float, seed: int = 13) -> list:
+    """Buka sebagian token prompt untuk perhitungan loss — STRIDE deterministik.
+
+    Untuk dataset prompt-dominan (rasio prompt:completion > 5:1), masking
+    penuh (-100) membuang seluruh sinyal gradien tentang bahasa/domain input.
+    Membuka sebagian kecil token prompt memberi model konteks domain —
+    penting untuk data non-Inggris / dokumen panjang (clinical notes dsb).
+
+    Implementasi BERBEDA dari pendekatan Bernoulli per-token yang lazim:
+    setiap sampel membuka tepat 1 dari setiap round(1/plw) token prompt,
+    dengan offset bergilir per sampel. Keuntungan: fraksi yang dibuka
+    presisi (bukan ekspektasi), varian gradien antar batch lebih rendah,
+    dan hasil identik antar rank DDP tanpa sinkronisasi RNG.
+    """
+    if plw <= 0 or not samples:
+        return samples
+    stride = max(2, int(round(1.0 / plw)))
+    n_open = 0
+    n_prompt = 0
+    for si, s in enumerate(samples):
+        ids = s.get("input_ids", [])
+        labs = s.get("labels", [])
+        if len(ids) != len(labs):
+            continue
+        new_labs = list(labs)
+        offset = (si + seed) % stride
+        k = 0
+        for i, lab in enumerate(labs):
+            if lab == -100:
+                if k % stride == offset:
+                    new_labs[i] = ids[i]
+                    n_open += 1
+                k += 1
+        n_prompt += k
+        s["labels"] = new_labs
+    print(
+        f"[plw-stride] {n_open}/{n_prompt} token prompt dibuka "
+        f"(stride={stride}, fraksi efektif={n_open / max(1, n_prompt):.3%})",
+        flush=True,
+    )
+    return samples

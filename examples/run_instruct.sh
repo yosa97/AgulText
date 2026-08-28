@@ -231,11 +231,15 @@ BASELINE_STATS_FILE="$CACHE_DIR/datasets/baseline_stats_test.json"
 cat > "$BASELINE_STATS_FILE" << BSEOF
 {
   "task_type": "InstructTextTask",
-  "gradient_noise_scale": null,
-  "near_duplicate_rate": 0.02,
-  "prompt_tokens": 120000,
-  "completion_tokens": 340000,
-  "seq_length_distribution": {"p50": 180, "p90": 420, "p99": ${BS_P99:-900}}
+  "dataset": {
+    "near_duplicate_rate": 0.02,
+    "prompt_tokens": ${BS_PROMPT_TOK:-120000},
+    "completion_tokens": ${BS_COMP_TOK:-340000},
+    "seq_length_distribution": {"p50": 180, "p90": 420, "p99": ${BS_P99:-900}}
+  },
+  "training": {
+    "gradient_noise_scale": null
+  }
 }
 BSEOF
 echo ">>> Simulasi BASELINE_STATS_PATH aktif (dengan nilai null yang menguji parsing)"

@@ -431,6 +431,26 @@ def main():
         max_length
     )
     log_info(f"train_size: {len(train_ds)}; dev_size: {len(dev_ds)}")
+
+    # ── Prompt Loss Weight untuk dataset prompt-dominan ──────────────────────
+    # Rasio prompt:completion dari baseline_stats (skema bersarang "dataset").
+    # Jika > 5:1 (mis. clinical notes / newsqa: dokumen panjang, jawaban
+    # pendek), buka sebagian token prompt via stride deterministik agar model
+    # mendapat sinyal domain/bahasa dari prompt. Bobot menurun untuk rasio
+    # ekstrem agar gradien completion tidak terdilusi. Hanya train set —
+    # dev dibiarkan (metrik seleksi harus tetap murni completion).
+    try:
+        _dstats = (_baseline_stats.get("dataset") or {}) if _baseline_stats else {}
+        _ptok = float(_dstats.get("prompt_tokens") or _baseline_stats.get("prompt_tokens") or 0)
+        _ctok = float(_dstats.get("completion_tokens") or _baseline_stats.get("completion_tokens") or 0)
+        if _ctok > 0 and (_ptok / _ctok) > 5.0:
+            _pc_ratio = _ptok / _ctok
+            _plw_frac = 0.05 / max(1.0, _pc_ratio / 5.0)
+            from seq_quality_filter import stride_unmask_prompt
+            train_ds.eval_dataset = stride_unmask_prompt(train_ds.eval_dataset, _plw_frac)
+            log_info(f"[plw] prompt:completion={_pc_ratio:.1f}:1 → stride-unmask fraksi={_plw_frac:.4f}")
+    except Exception as _plw_err:
+        log_info(f"[plw] dilewati: {_plw_err}")
     
     
     donot_pack = False
@@ -684,7 +704,13 @@ def main():
     # melempar TypeError yang membunuh SEMUA attempt (tidak pernah terjadi di
     # test lokal karena BASELINE_STATS_PATH tidak pernah di-set).
     try:
-        _grad_noise = float(_baseline_stats.get("gradient_noise_scale") or 0.0)
+        # Skema asli: baseline_stats["training"]["gradient_noise_scale"]
+        # (bersarang — diverifikasi dari repo winner). Baca dua jalur.
+        _grad_noise = float(
+            (_baseline_stats.get("training") or {}).get("gradient_noise_scale")
+            or _baseline_stats.get("gradient_noise_scale")
+            or 0.0
+        )
     except (TypeError, ValueError):
         _grad_noise = 0.0
     _neftune_alpha = 5.0 if _grad_noise > 1.0 else 1.0

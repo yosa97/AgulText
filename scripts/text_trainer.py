@@ -532,7 +532,14 @@ def main():
     # p99×1.2 (dibatasi 8192, kelipatan 64) sebagai sequence_len tokenisasi.
     # seq_analyzer tetap menentukan max_length training FINAL sesudahnya.
     try:
-        _sd = (baseline_stats or {}).get("seq_length_distribution") or {}
+        # Skema asli validator BERSARANG: baseline_stats["dataset"][...]
+        # (diverifikasi dari repo winner 24 Agu). Baca dua jalur demi aman.
+        _bs = baseline_stats or {}
+        _sd = (
+            (_bs.get("dataset") or {}).get("seq_length_distribution")
+            or _bs.get("seq_length_distribution")
+            or {}
+        )
         _p99 = _sd.get("p99")
         if _p99 and float(_p99) > 0 and "train_request" in train_info:
             _tok_len = int(min(8192, max(2048, float(_p99) * 1.2)))
