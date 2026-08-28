@@ -51,11 +51,12 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
-# Dapat di-override via env untuk kalibrasi A/B dengan evaluator lokal
-# (tournament 24 Agu: tertinggal 10-26% dari cluster → dugaan LR terlalu
-# konservatif; argmin/2 + blend 50% menghasilkan ~setengah LR optimal).
-_SAFETY_DIV       = _env_float("LR_SAFETY_DIV", 2.0)   # LR = argmin_lr / safety
-_BLEND_WEIGHT     = _env_float("LR_BLEND_W", 0.5)      # bobot hasil test vs estimasi
+# Default DIKALIBRASI EMPIRIS 28 Agu pada test set task tournament nyata
+# (28c9f3bb, Llama-3.2-1B): safety 1.4 + blend 0.7 → eval_loss 1.8506 vs
+# 1.8563 dengan nilai lama (2.0/0.5). Tetap bisa di-override via env untuk
+# eksperimen kalibrasi berikutnya.
+_SAFETY_DIV       = _env_float("LR_SAFETY_DIV", 1.4)   # LR = argmin_lr / safety
+_BLEND_WEIGHT     = _env_float("LR_BLEND_W", 0.7)      # bobot hasil test vs estimasi
 _MAX_BUDGET_SECS  = 420.0  # hard cap waktu untuk seluruh ramp
 _BUDGET_FRACTION  = 0.06   # atau 6% dari sisa waktu, mana yang lebih kecil
 _MIN_REMAIN_SECS  = 1200.0 # skip kalau sisa waktu < 20 menit
