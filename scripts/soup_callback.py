@@ -142,6 +142,17 @@ class ModelSoupCallback(TrainerCallback):
         self._loss_history: list[float] = []
         self._rollback_done: bool = False
 
+        # ── EMA bobot sepanjang lintasan training ────────────────────────────
+        # Kandidat submission ketiga (selain best-single dan pool-avg):
+        # rata-rata bergerak eksponensial dari bobot, di-update tiap N step.
+        # Berbeda mekanisme dari pool-avg (yang merata-rata K titik eval
+        # terbaik) — EMA menghaluskan SEPANJANG lintasan, sering unggul 1-3%
+        # pada akhir jadwal decay. Matikan via EMA=0.
+        self._ema_enabled = os.environ.get("EMA", "1") != "0"
+        self._ema_every = max(1, int(os.environ.get("EMA_EVERY") or 10))
+        self._ema_decay = float(os.environ.get("EMA_DECAY") or 0.99)
+        self._ema_state: Optional[dict] = None
+
     # ── Snapshot helpers ──────────────────────────────────────────────────────
 
     def _snapshot_gb(self, model) -> float:
@@ -420,6 +431,101 @@ class ModelSoupCallback(TrainerCallback):
                 pass
             shutil.rmtree(backup_dir, ignore_errors=True)
 
+    # ── EMA machinery ─────────────────────────────────────────────────────────
+
+    @torch.no_grad()
+    def _ema_update(self, model) -> None:
+        """Update EMA CPU-float32 dari bobot trainable (rank-0 saja)."""
+        um = _unwrap(model)
+        if self._ema_state is None:
+            self._ema_state = {
+                n: p.data.detach().float().cpu().clone()
+                for n, p in um.named_parameters() if p.requires_grad
+            }
+            return
+        d = self._ema_decay
+        for n, p in um.named_parameters():
+            if p.requires_grad and n in self._ema_state:
+                self._ema_state[n].mul_(d).add_(
+                    p.data.detach().float().cpu(), alpha=1.0 - d
+                )
+
+    def _try_ema_candidate(self, model) -> None:
+        """Evaluasi bobot EMA; simpan ke submission jika mengalahkan best.
+
+        DDP-safe: keputusan ada/tidaknya EMA di-broadcast dari rank-0,
+        semua rank ikut evaluate() dan sync bobot.
+        """
+        is_main = is_main_process(LOCAL_RANK)
+        _has = 1 if (self._ema_enabled and self._ema_state is not None) else 0
+        if torch.distributed.is_initialized():
+            dev = next(_unwrap(model).parameters()).device
+            t = torch.tensor([_has], dtype=torch.long, device=dev)
+            torch.distributed.broadcast(t, src=0)
+            _has = int(t.item())
+        if not _has or self.trainer is None:
+            return
+
+        prev_state = None
+        if is_main:
+            um = _unwrap(model)
+            prev_state = {
+                n: p.data.cpu().clone()
+                for n, p in um.named_parameters() if p.requires_grad
+            }
+            with torch.no_grad():
+                for n, p in um.named_parameters():
+                    if p.requires_grad and n in self._ema_state:
+                        p.data.copy_(self._ema_state[n].to(p.dtype).to(p.device))
+        self._sync_params(model)
+
+        self._evaluating = True
+        try:
+            _m = self.trainer.evaluate()
+            ema_loss = _m.get("eval_loss", float("inf"))
+        except Exception as _e:
+            if is_main:
+                print(f"[soup] eval EMA gagal: {_e}", flush=True)
+            ema_loss = float("inf")
+        finally:
+            self._evaluating = False
+        ema_loss = self._sync_scalar(model, ema_loss)
+
+        if ema_loss < self.best_loss - 1e-4:
+            if is_main:
+                print(
+                    f"[soup] EMA LEBIH BAIK: {ema_loss:.4f} < {self.best_loss:.4f} "
+                    f"— menyimpan ke submission",
+                    flush=True,
+                )
+            self.best_loss = ema_loss
+            self._save_to_submission(model, ema_loss)
+        else:
+            if is_main:
+                print(
+                    f"[soup] EMA tidak lebih baik ({ema_loss:.4f} >= {self.best_loss:.4f})",
+                    flush=True,
+                )
+                if prev_state is not None:
+                    with torch.no_grad():
+                        for n, p in _unwrap(model).named_parameters():
+                            if p.requires_grad and n in prev_state:
+                                p.data.copy_(prev_state[n].to(p.device))
+            self._sync_params(model)
+
+        if is_main:
+            self._ema_state = None
+        del prev_state
+        gc.collect()
+
+    def on_step_end(self, args, state: TrainerState, control: TrainerControl, model=None, **kw):
+        if not self._ema_enabled or model is None:
+            return
+        if state.global_step % self._ema_every != 0:
+            return
+        if is_main_process(LOCAL_RANK):
+            self._ema_update(model)
+
     # ── TrainerCallback hooks ─────────────────────────────────────────────────
 
     def on_train_begin(self, args, state: TrainerState, control: TrainerControl, model=None, **kw):
@@ -537,6 +643,10 @@ class ModelSoupCallback(TrainerCallback):
                     f"[soup] hanya {self._pool_size()} snapshot di pool, skip averaging",
                     flush=True,
                 )
+            # EMA tetap dievaluasi meski pool kosong
+            self._try_ema_candidate(model)
+            if torch.distributed.is_initialized():
+                torch.distributed.barrier()
             return
 
         if is_main:
@@ -592,6 +702,9 @@ class ModelSoupCallback(TrainerCallback):
                     if n in current_state and p.requires_grad:
                         p.data.copy_(current_state[n].to(p.device))
             self._sync_params(model)
+
+        # Kandidat ketiga: EMA (setelah keputusan pool-avg selesai)
+        self._try_ema_candidate(model)
 
         # Cleanup pool → bebaskan RAM
         for entry in self._pool_data:

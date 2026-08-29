@@ -679,6 +679,37 @@ def main():
         submission_dir=train_request["submission_dir"],
     )
 
+    # ── Gradient checkpointing adaptif ───────────────────────────────────────
+    # Grad-ckpt menukar ~25-35% kecepatan demi hemat VRAM. Pada task model
+    # kecil (≤2.5B, token/step moderat) VRAM 80GB berlimpah — trade-off itu
+    # murni kerugian: waktu = loss di tournament berbatas waktu (lebih banyak
+    # step/epoch = eval lebih rendah). Matikan otomatis saat aman; override:
+    # GRAD_CKPT=1 (paksa on) / GRAD_CKPT=0 (paksa off) / auto (default).
+    _gc_mode = os.environ.get("GRAD_CKPT", "auto").lower()
+    _n_params = sum(p.numel() for p in model.parameters())
+    _tokens_per_microbatch = (
+        training_args.per_device_train_batch_size * int(max_length)
+    )
+    _gc_off = (_gc_mode == "0") or (
+        _gc_mode == "auto"
+        and _n_params <= 2_500_000_000
+        and _tokens_per_microbatch <= 90_000
+        and kl_coef == 0.0          # jalur KL butuh headroom logits ganda
+        and not training_args.use_lora  # LoRA sudah hemat; biarkan default
+    )
+    if _gc_off and training_args.gradient_checkpointing:
+        training_args.gradient_checkpointing = False
+        try:
+            if getattr(model, "is_gradient_checkpointing", False):
+                model.gradient_checkpointing_disable()
+        except Exception:
+            pass
+        log_info(
+            f"[grad-ckpt] DIMATIKAN (params={_n_params/1e9:.2f}B, "
+            f"token/microbatch={_tokens_per_microbatch}) — "
+            f"~25-35% lebih banyak step dalam budget waktu yang sama"
+        )
+
     # ── Model referensi beku untuk jalur KL full fine-tune ──────────────────
     # LoRA tidak butuh ini (adapter bisa dinonaktifkan via context manager).
     # Full-FT: muat salinan beku sebelum trainer dibuat agar device sudah benar.
