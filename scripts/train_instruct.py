@@ -690,10 +690,16 @@ def main():
     _tokens_per_microbatch = (
         training_args.per_device_train_batch_size * int(max_length)
     )
+    # Vocab besar (Qwen3: 151k) membengkakkan memori loss fused (grad_weight
+    # fp32 + chunk logits) — token×vocab adalah proksi beban itu. Batas 6e9
+    # dikalibrasi empiris: SmolLM 49k vocab × 71k token ≈ 3.5e9 aman;
+    # Qwen3 152k vocab × 71k token ≈ 1.1e10 OOM di H100 80GB.
+    _vocab_size = int(getattr(model.config, "vocab_size", 32_000) or 32_000)
     _gc_off = (_gc_mode == "0") or (
         _gc_mode == "auto"
         and _n_params <= 2_500_000_000
         and _tokens_per_microbatch <= 90_000
+        and _tokens_per_microbatch * _vocab_size <= 6_000_000_000
         and kl_coef == 0.0          # jalur KL butuh headroom logits ganda
         and not training_args.use_lora  # LoRA sudah hemat; biarkan default
     )
@@ -706,7 +712,7 @@ def main():
             pass
         log_info(
             f"[grad-ckpt] DIMATIKAN (params={_n_params/1e9:.2f}B, "
-            f"token/microbatch={_tokens_per_microbatch}) — "
+            f"token/microbatch={_tokens_per_microbatch}, vocab={_vocab_size}) — "
             f"~25-35% lebih banyak step dalam budget waktu yang sama"
         )
 
