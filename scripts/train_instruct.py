@@ -695,11 +695,18 @@ def main():
     # dikalibrasi empiris: SmolLM 49k vocab × 71k token ≈ 3.5e9 aman;
     # Qwen3 152k vocab × 71k token ≈ 1.1e10 OOM di H100 80GB.
     _vocab_size = int(getattr(model.config, "vocab_size", 32_000) or 32_000)
+    # Atensi eager (falcon-rw, phi-2, dll. yang FA-off) menyimpan matriks
+    # atensi kuadratik seq² per layer — tanpa grad-ckpt itu meledak (bukti:
+    # T1 31 Agu, falcon-rw-1b OOM kaskade bs12→6→3). Eager = ckpt wajib on.
+    _attn_impl = str(
+        getattr(model.config, "_attn_implementation", "") or ""
+    ).lower()
     _gc_off = (_gc_mode == "0") or (
         _gc_mode == "auto"
         and _n_params <= 2_500_000_000
         and _tokens_per_microbatch <= 90_000
         and _tokens_per_microbatch * _vocab_size <= 6_000_000_000
+        and _attn_impl != "eager"   # eager: memori atensi kuadratik
         and kl_coef == 0.0          # jalur KL butuh headroom logits ganda
         and not training_args.use_lora  # LoRA sudah hemat; biarkan default
     )
@@ -712,7 +719,8 @@ def main():
             pass
         log_info(
             f"[grad-ckpt] DIMATIKAN (params={_n_params/1e9:.2f}B, "
-            f"token/microbatch={_tokens_per_microbatch}, vocab={_vocab_size}) — "
+            f"token/microbatch={_tokens_per_microbatch}, vocab={_vocab_size}, "
+            f"attn={_attn_impl}) — "
             f"~25-35% lebih banyak step dalam budget waktu yang sama"
         )
 

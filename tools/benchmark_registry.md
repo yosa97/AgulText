@@ -34,3 +34,18 @@ Tambahkan task baru setiap Senin selesai (JSON hasil → baris baru di sini).
 - 2026-08-28: LR safety 2.0→1.4, blend 0.5→0.7 → 1.8563→1.8506 (T1). Dibakukan.
 - 2026-08-28: pre-tokenize p99 (data panjang tidak dibuang) → 0.2541→0.1182 (T2). Efek terbesar sejauh ini.
 - Kandidat berikut: Prompt Loss Weight (T1/T2 prompt-dominan), MAD outlier filter, near-dedup split.
+
+## Tournament 31 Agu 2026 (tourn_add1dc83b8fd58b0) — Group Stage, rank 10/11
+| Task | Model | Dataset | Jam | Loss kita | Rank | Winner | Kluster tengah |
+|---|---|---|---|---|---|---|---|
+| T1 d99ce208 | tiiuae/falcon-rw-1b | lighteval/summarization | 1.25 | 3.0088 | 10/11 | 1.4721 | 2.2–2.6 |
+| T2 bc347f11 | Qwen/Qwen2.5-3B-Instruct | hivaze/ru-AAQG-QA-QG | 1.5 | 0.5883 | 10/11 | 0.5277 | 0.545–0.575 |
+| T3 597dc05e | bigscience/bloomz-560m | AlekseyKorshuk/evol-codealpaca-v1-dpo | 1.25 | 1.4304 | 6/11 | 1.3348 | 1.41–1.49 |
+Catatan: 0 DNF (pertama kalinya). T1 anomali (di bawah kluster) — hipotesis: overhead pipeline memakan waktu di task pendek + falcon FA-off lambat. T3 mid-pack = jalur sehat.
+URL train/test data: lihat JSON task (valid s/d ~7 Sep).
+
+### Temuan kalibrasi T1 (2 Sep): repro lokal dev-loss 1.577 ≈ papan atas (1.47–1.55)
+Akar skor 3.0088 di tournament: falcon-rw = eager attention (FA-off) + E1 mematikan
+grad-ckpt → memori atensi kuadratik meledak → OOM kaskade bs12→6→3, waktu/attempt habis,
+tersubmit model level-base. Fix: E1 kini syarat attn != eager (train_instruct.py).
+Dengan bs3 + 1 epoch penuh: best 1.5771 @ step1000, soup & EMA benar menolak, final_dev jalan.
