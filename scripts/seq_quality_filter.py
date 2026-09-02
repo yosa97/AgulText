@@ -161,7 +161,13 @@ def mad_stat_filter(
     k_mad: float = 4.0,
     dominance: float = 0.6,
     min_samples: int = 500,
+    use_len_gate: bool = False,
 ) -> list[dict]:
+    # TERKALIBRASI (T1 falcon, 2 Sep): gerbang panjang MERUGIKAN (1.5353→1.5432)
+    # karena dokumen terpanjang di task summarization adalah data sah, bukan
+    # outlier. use_len_gate default False; hanya deteksi completion degeneratif
+    # yang aktif. Aktifkan kembali via QF_MAD_LEN=1 jika suatu dataset terbukti
+    # kotor panjangnya.
     import math
 
     if len(samples) < min_samples:
@@ -186,8 +192,8 @@ def mad_stat_filter(
     med = logs[len(logs) // 2]
     devs = sorted(abs(x - med) for x in logs)
     mad = devs[len(devs) // 2]
-    if mad < 1e-6:
-        lo, hi = -1.0, float("inf")
+    if not use_len_gate or mad < 1e-6:
+        lo, hi = float("-inf"), float("inf")
     else:
         lo, hi = med - k_mad * mad, med + k_mad * mad
 

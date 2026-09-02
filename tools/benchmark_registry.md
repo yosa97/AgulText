@@ -64,3 +64,7 @@ Evaluator lokal mereproduksi angka winner 4 desimal → harness valid.
 - Kill-switch: NEAR_DEDUP=0 / QF_MAD=0; radius: NEAR_DEDUP_R.
 - Uji sintetis: 44/50 near-dup pendek tertangkap, 0 false positive pada 3000 unik.
 - Benchmark: T1 falcon 1.5353 (tanpa filter) → target ≤1.50 dengan filter.
+- 2026-09-02 (qf): T1 falcon — filter penuh 1.5432 vs baseline 1.5353 → gerbang
+  panjang MAD merugikan (buang 330 dok terpanjang yang sah). Dibakukan: len-gate
+  default OFF (QF_MAD_LEN=1 utk opt-in); near-dedup + deteksi degeneratif tetap ON
+  (netral di data bersih, potensi besar di dataset kotor).

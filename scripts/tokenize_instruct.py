@@ -338,7 +338,13 @@ def main(training_request_path: str):
             _all_tok = simhash_near_dedup(_all_tok, hamming_radius=_r)
         if os.environ.get("QF_MAD", "1") != "0":
             _k = float(os.environ.get("QF_MAD_K", "4.0"))
-            _all_tok = mad_stat_filter(_all_tok, k_mad=_k)
+            # Gerbang panjang default MATI (terkalibrasi merugikan di T1 —
+            # dokumen panjang = data sah). QF_MAD_LEN=1 untuk mengaktifkan.
+            _all_tok = mad_stat_filter(
+                _all_tok,
+                k_mad=_k,
+                use_len_gate=os.environ.get("QF_MAD_LEN", "0") == "1",
+            )
 
         _dev_new, _train_new = length_stratified_split(
             _all_tok,
