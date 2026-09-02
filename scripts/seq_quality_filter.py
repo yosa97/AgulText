@@ -63,6 +63,164 @@ def exact_dedup(samples: list[dict]) -> list[dict]:
     return result
 
 
+# ── Near-duplicate removal via SimHash ───────────────────────────────────────
+# Pendekatan BERBEDA dari MinHash/LSH yang lazim: SimHash 64-bit di atas
+# shingle 4-gram token, dengan pencarian radius Hamming via pigeonhole
+# (radius r → r+1 pita bit; dua fingerprint berjarak ≤r pasti identik di
+# minimal satu pita). Keuntungan vs MinHash: satu integer per sampel (hemat
+# memori), deterministik tanpa permutasi acak, dan verifikasi jarak eksak
+# (popcount) alih-alih estimasi Jaccard.
+
+def simhash_near_dedup(
+    samples: list[dict],
+    hamming_radius: int = 6,
+    max_shingles: int = 256,
+    min_tokens: int = 24,
+) -> list[dict]:
+    """Buang sampel yang hampir-duplikat (SimHash Hamming ≤ radius).
+
+    Sampel sangat pendek (< min_tokens) dilewati dari near-dedup — fingerprint
+    mereka terlalu mudah bertabrakan padahal kontennya bisa berbeda sah.
+    First-occurrence wins; urutan asli dipertahankan.
+    """
+    if not samples:
+        return samples
+    t0 = time.perf_counter()
+    n_bands = hamming_radius + 1
+    band_bits = 64 // n_bands
+    band_mask = (1 << band_bits) - 1
+
+    def _fingerprint(ids) -> int:
+        # Shingle 4-gram dengan stride adaptif agar ≤ max_shingles shingle.
+        n = len(ids) - 3
+        step = max(1, n // max_shingles)
+        counts = [0] * 64
+        for i in range(0, n, step):
+            h = hash((ids[i], ids[i + 1], ids[i + 2], ids[i + 3])) & 0xFFFFFFFFFFFFFFFF
+            for b in range(64):
+                counts[b] += 1 if (h >> b) & 1 else -1
+        fp = 0
+        for b in range(64):
+            if counts[b] > 0:
+                fp |= 1 << b
+        return fp
+
+    buckets: list[dict[int, list[int]]] = [dict() for _ in range(n_bands)]
+    kept: list[dict] = []
+    n_near = 0
+
+    for s in samples:
+        ids = s.get("input_ids", [])
+        if isinstance(ids, torch.Tensor):
+            ids = ids.tolist()
+        if len(ids) < max(min_tokens, 4):
+            kept.append(s)
+            continue
+        fp = _fingerprint(ids)
+
+        is_dup = False
+        cand_seen: set[int] = set()
+        for bi in range(n_bands):
+            key = (fp >> (bi * band_bits)) & band_mask
+            for cand_fp in buckets[bi].get(key, ()):  # fingerprint terdahulu
+                if cand_fp in cand_seen:
+                    continue
+                cand_seen.add(cand_fp)
+                if bin(fp ^ cand_fp).count("1") <= hamming_radius:
+                    is_dup = True
+                    break
+            if is_dup:
+                break
+
+        if is_dup:
+            n_near += 1
+            continue
+        for bi in range(n_bands):
+            key = (fp >> (bi * band_bits)) & band_mask
+            buckets[bi].setdefault(key, []).append(fp)
+        kept.append(s)
+
+    dt = time.perf_counter() - t0
+    pct = 100 * n_near / max(1, len(samples))
+    print(
+        f"[seq_quality] near-dedup (simhash r={hamming_radius}): "
+        f"{len(samples)} → {len(kept)} (-{n_near}, {pct:.1f}%) dalam {dt:.1f}s",
+        flush=True,
+    )
+    return kept
+
+
+# ── MAD gate pada statistik token (murah, tanpa model) ───────────────────────
+# Analog konservatif dari filter kualitas berbasis loss: buang sampel yang
+# panjang completion-nya ekstrem (log-length di luar median ± k×MAD) atau
+# completion-nya degeneratif (satu token mendominasi). Tanpa forward pass,
+# biaya O(n) murni CPU.
+
+def mad_stat_filter(
+    samples: list[dict],
+    k_mad: float = 4.0,
+    dominance: float = 0.6,
+    min_samples: int = 500,
+) -> list[dict]:
+    import math
+
+    if len(samples) < min_samples:
+        return samples
+
+    def _comp_tokens(s):
+        labs = s.get("labels", [])
+        if isinstance(labs, torch.Tensor):
+            labs = labs.tolist()
+        return [t for t in labs if t != -100]
+
+    comp_lens = []
+    comps = []
+    for s in samples:
+        c = _comp_tokens(s)
+        comps.append(c)
+        comp_lens.append(len(c))
+
+    logs = sorted(math.log1p(x) for x in comp_lens if x > 0)
+    if len(logs) < min_samples:
+        return samples
+    med = logs[len(logs) // 2]
+    devs = sorted(abs(x - med) for x in logs)
+    mad = devs[len(devs) // 2]
+    if mad < 1e-6:
+        lo, hi = -1.0, float("inf")
+    else:
+        lo, hi = med - k_mad * mad, med + k_mad * mad
+
+    kept = []
+    n_len, n_dom = 0, 0
+    for s, c, L in zip(samples, comps, comp_lens):
+        if L == 0:
+            kept.append(s)  # kasus loss=0 ditangani di tempat lain
+            continue
+        lg = math.log1p(L)
+        if not (lo <= lg <= hi):
+            n_len += 1
+            continue
+        if L > 20:
+            top = max(c.count(t) for t in set(c[:200]))
+            if top / min(L, 200) > dominance:
+                n_dom += 1
+                continue
+        kept.append(s)
+
+    n_drop = n_len + n_dom
+    if n_drop:
+        print(
+            f"[seq_quality] MAD gate: -{n_len} outlier panjang, "
+            f"-{n_dom} completion degeneratif "
+            f"(band log-len=[{lo:.2f},{hi:.2f}], {len(samples)}→{len(kept)})",
+            flush=True,
+        )
+    else:
+        print("[seq_quality] MAD gate: tidak ada yang dibuang", flush=True)
+    return kept
+
+
 # ── Per-sample loss (no-grad forward pass) ───────────────────────────────────
 
 @torch.no_grad()
@@ -239,7 +397,7 @@ def run_quality_filter(
         )
         return after_dedup
 
-    losses = compute_losses(after_dedup, model=model, batch_size=batch_size, device=device)
+    losses = compute_losses(model, after_dedup, batch_size=batch_size, device=device)
 
     if debug_path:
         try:

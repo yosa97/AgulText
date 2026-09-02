@@ -55,3 +55,12 @@ yosa722/bench-t1-falcon = **1.5353** → setara rank 3/11 (winner 1.4721, rank2 
 rank3 1.5479; skor kita saat tournament 3.0088). Fix E1-eager terbukti mengubah
 rank 10 → rank 3 di T1. Sisa gap ke winner 4.3% = wilayah kualitas data (MAD/near-dedup).
 Evaluator lokal mereproduksi angka winner 4 desimal → harness valid.
+
+### Fitur baru (2 Sep): near-dedup SimHash + MAD gate (distinct dari winner)
+- simhash_near_dedup: 64-bit SimHash atas shingle 4-gram token, pencarian radius
+  Hamming r=6 via pigeonhole 7 pita — BUKAN MinHash/LSH (keluarga metode berbeda).
+- mad_stat_filter: median±4×MAD pada log-panjang-completion + deteksi completion
+  degeneratif (1 token >60%). Tanpa forward pass.
+- Kill-switch: NEAR_DEDUP=0 / QF_MAD=0; radius: NEAR_DEDUP_R.
+- Uji sintetis: 44/50 near-dup pendek tertangkap, 0 false positive pada 3000 unik.
+- Benchmark: T1 falcon 1.5353 (tanpa filter) → target ≤1.50 dengan filter.

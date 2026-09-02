@@ -310,7 +310,11 @@ def main(training_request_path: str):
     train_tok_path = f"datasets/train_tokenized_{task_id}.json"
     dev_tok_path   = f"datasets/dev_tokenized_{task_id}.json"
     try:
-        from seq_quality_filter import exact_dedup
+        from seq_quality_filter import (
+            exact_dedup,
+            mad_stat_filter,
+            simhash_near_dedup,
+        )
         from stratified_split import length_stratified_split
 
         with open(train_tok_path, "r") as _f:
@@ -326,6 +330,15 @@ def main(training_request_path: str):
         )
 
         _all_tok = exact_dedup(_all_tok)
+
+        # Near-dedup (SimHash) + MAD gate — kill-switch via env untuk kalibrasi:
+        # NEAR_DEDUP=0 mematikan simhash, QF_MAD=0 mematikan MAD gate.
+        if os.environ.get("NEAR_DEDUP", "1") != "0":
+            _r = int(os.environ.get("NEAR_DEDUP_R", "6"))
+            _all_tok = simhash_near_dedup(_all_tok, hamming_radius=_r)
+        if os.environ.get("QF_MAD", "1") != "0":
+            _k = float(os.environ.get("QF_MAD_K", "4.0"))
+            _all_tok = mad_stat_filter(_all_tok, k_mad=_k)
 
         _dev_new, _train_new = length_stratified_split(
             _all_tok,
