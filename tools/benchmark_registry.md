@@ -49,3 +49,9 @@ Akar skor 3.0088 di tournament: falcon-rw = eager attention (FA-off) + E1 memati
 grad-ckpt → memori atensi kuadratik meledak → OOM kaskade bs12→6→3, waktu/attempt habis,
 tersubmit model level-base. Fix: E1 kini syarat attn != eager (train_instruct.py).
 Dengan bs3 + 1 epoch penuh: best 1.5771 @ step1000, soup & EMA benar menolak, final_dev jalan.
+
+### Verifikasi fix eager (2 Sep, eval resmi test set T1)
+yosa722/bench-t1-falcon = **1.5353** → setara rank 3/11 (winner 1.4721, rank2 1.5187,
+rank3 1.5479; skor kita saat tournament 3.0088). Fix E1-eager terbukti mengubah
+rank 10 → rank 3 di T1. Sisa gap ke winner 4.3% = wilayah kualitas data (MAD/near-dedup).
+Evaluator lokal mereproduksi angka winner 4 desimal → harness valid.
