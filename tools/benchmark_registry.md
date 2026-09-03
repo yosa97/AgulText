@@ -78,3 +78,7 @@ Evaluator lokal mereproduksi angka winner 4 desimal → harness valid.
   (compute_losses ditulis ulang: padding + batch dinamis budget token by vocab,
   sentinel -1 utk OOM; IQR k=2.5 via QF_LOSS_K). Default QF_LOSS MASIH 0 —
   kalibrasi dulu di benchmark T2 (0.5695), menang → flip default sebelum Senin.
+- 2026-09-03 (T2): FINAL_DEV_RESERVE tervalidasi sendiri: 0.5695 → 0.5654 (−0.7%)
+  — QF_LOSS ternyata TIDAK sampai container (passthrough env kurang; diperbaiki
+  di run_instruct.sh). Perbaikan murni dari final_dev yang kini selalu jalan.
+  QF_LOSS belum teruji → run bench-t2-qwen3b-qfloss2. Baseline baru T2: 0.5654.

@@ -290,6 +290,16 @@ docker run --rm \
     -e KL_COEF="${KL_COEF:-}" \
     -e LR_SAFETY_DIV="${LR_SAFETY_DIV:-}" \
     -e LR_BLEND_W="${LR_BLEND_W:-}" \
+    -e QF_LOSS="${QF_LOSS:-}" \
+    -e QF_LOSS_K="${QF_LOSS_K:-}" \
+    -e NEAR_DEDUP="${NEAR_DEDUP:-}" \
+    -e NEAR_DEDUP_R="${NEAR_DEDUP_R:-}" \
+    -e QF_MAD="${QF_MAD:-}" \
+    -e QF_MAD_K="${QF_MAD_K:-}" \
+    -e QF_MAD_LEN="${QF_MAD_LEN:-}" \
+    -e FINAL_DEV_RESERVE="${FINAL_DEV_RESERVE:-}" \
+    -e GRAD_CKPT="${GRAD_CKPT:-}" \
+    -e EMA="${EMA:-}" \
     -e HF_HUB_ENABLE_HF_TRANSFER=1 \
     -e TASK_ID="$TASK_ID" \
     -e MODEL="$MODEL" \
