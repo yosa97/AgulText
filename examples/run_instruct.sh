@@ -300,6 +300,7 @@ docker run --rm \
     -e FINAL_DEV_RESERVE="${FINAL_DEV_RESERVE:-}" \
     -e GRAD_CKPT="${GRAD_CKPT:-}" \
     -e EMA="${EMA:-}" \
+    -e NO_DECAY="${NO_DECAY:-}" \
     -e HF_HUB_ENABLE_HF_TRANSFER=1 \
     -e TASK_ID="$TASK_ID" \
     -e MODEL="$MODEL" \

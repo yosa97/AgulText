@@ -334,10 +334,10 @@ def main(training_request_path: str):
         # Near-dedup (SimHash) + MAD gate — kill-switch via env untuk kalibrasi:
         # NEAR_DEDUP=0 mematikan simhash, QF_MAD=0 mematikan MAD gate.
         if os.environ.get("NEAR_DEDUP", "1") != "0":
-            _r = int(os.environ.get("NEAR_DEDUP_R", "6"))
+            _r = int(os.environ.get("NEAR_DEDUP_R") or 6)
             _all_tok = simhash_near_dedup(_all_tok, hamming_radius=_r)
         if os.environ.get("QF_MAD", "1") != "0":
-            _k = float(os.environ.get("QF_MAD_K", "4.0"))
+            _k = float(os.environ.get("QF_MAD_K") or 4.0)
             # Gerbang panjang default MATI (terkalibrasi merugikan di T1 —
             # dokumen panjang = data sah). QF_MAD_LEN=1 untuk mengaktifkan.
             _all_tok = mad_stat_filter(
@@ -375,7 +375,7 @@ def main(training_request_path: str):
                 _mdl = None
                 _torch.cuda.empty_cache()
 
-                _k_loss = float(os.environ.get("QF_LOSS_K", "2.5"))
+                _k_loss = float(os.environ.get("QF_LOSS_K") or 2.5)
                 _all_tok = iqr_filter(_all_tok, _losses, k=_k_loss)
                 print(
                     f"[qf-loss] selesai dalam "

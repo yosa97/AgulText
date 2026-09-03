@@ -685,7 +685,7 @@ def main():
     # murni kerugian: waktu = loss di tournament berbatas waktu (lebih banyak
     # step/epoch = eval lebih rendah). Matikan otomatis saat aman; override:
     # GRAD_CKPT=1 (paksa on) / GRAD_CKPT=0 (paksa off) / auto (default).
-    _gc_mode = os.environ.get("GRAD_CKPT", "auto").lower()
+    _gc_mode = (os.environ.get("GRAD_CKPT") or "auto").lower()
     _n_params = sum(p.numel() for p in model.parameters())
     _tokens_per_microbatch = (
         training_args.per_device_train_batch_size * int(max_length)
@@ -830,7 +830,14 @@ def main():
     # (horizon 999 epoch → LR konstan di peak). Dari t_per_step yang diukur kita
     # hitung berapa epoch yang realistis muat dalam budget → scheduler decay
     # dengan benar dan training berakhir terencana, bukan dipotong timer.
-    if _t_micro_step and _t_micro_step > 0 and total_steps_per_epoch > 0:
+    # NO_DECAY=1: lewati epoch planning → horizon 999 epoch → cosine tak pernah
+    # decay → LR konstan di peak sampai timer, checkpoint dirata-rata soup.
+    # Ditemukan tak sengaja 3 Sep (bug env): 0.5311 vs 0.5654 pipeline penuh di
+    # T2 — kandidat kuat resep duo teratas (pola WSD/SWA). Uji via env dulu.
+    _no_decay = (os.environ.get("NO_DECAY") or "0") == "1"
+    if _no_decay:
+        log_info("[epoch_plan] NO_DECAY=1 → planning dilewati, LR konstan + soup")
+    if (not _no_decay) and _t_micro_step and _t_micro_step > 0 and total_steps_per_epoch > 0:
         try:
             _end_dt = datetime.datetime.strptime(
                 train_request["end_time"], "%Y-%m-%d %H:%M:%S"
@@ -839,7 +846,9 @@ def main():
             # karena epoch planner memakai seluruh budget. Sisihkan ~240s agar
             # final_dev (+eval & save terakhir) selalu kebagian waktu — blend
             # α=0.3 ke dev bernilai ~0.5-1% loss, jangan hilang cuma-cuma.
-            _FINAL_DEV_RESERVE = float(os.environ.get("FINAL_DEV_RESERVE", "240"))
+            # `or` — bukan default get(): harness meneruskan env sebagai string
+            # KOSONG saat tak di-set, dan float("") meledak (bug 3 Sep).
+            _FINAL_DEV_RESERVE = float(os.environ.get("FINAL_DEV_RESERVE") or 240)
             _budget_secs = max(
                 0.0,
                 (_end_dt - datetime.datetime.now()).total_seconds()

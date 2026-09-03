@@ -82,3 +82,9 @@ Evaluator lokal mereproduksi angka winner 4 desimal → harness valid.
   — QF_LOSS ternyata TIDAK sampai container (passthrough env kurang; diperbaiki
   di run_instruct.sh). Perbaikan murni dari final_dev yang kini selalu jalan.
   QF_LOSS belum teruji → run bench-t2-qwen3b-qfloss2. Baseline baru T2: 0.5654.
+- 2026-09-03 (KECELAKAAN BERHARGA): env kosong ("") → int("")/float("") meledak →
+  run qfloss2 tanpa filter/split/epoch-plan → 0.5311 (!) vs 0.5654 pipeline penuh.
+  Resep tak sengaja: data penuh 59k + LR KONSTAN tanpa decay + soup avg (menang
+  0.5827<0.6292). Hipotesis: ini trik duo teratas (pola WSD/SWA). Semua env
+  di-harden (`or` default); saklar NO_DECAY=1 ditambahkan utk uji sengaja.
+  Baseline T2 terbaik: 0.5311 (konfigurasi belum resmi — perlu reproduksi sengaja).
