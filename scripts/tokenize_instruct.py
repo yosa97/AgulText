@@ -346,6 +346,52 @@ def main(training_request_path: str):
                 use_len_gate=os.environ.get("QF_MAD_LEN", "0") == "1",
             )
 
+        # Filter loss berbasis model (QF_LOSS=1): forward pass no-grad dengan
+        # base model → buang sampel yang NLL-nya ekstrem (label salah/jawaban
+        # ngawur — lolos dari dedup karena kontennya unik). Biaya ~4-8 mnt
+        # sekali jalan; GPU masih kosong pada tahap tokenize. Konservatif:
+        # gagal apa pun → lanjut tanpa filter.
+        if os.environ.get("QF_LOSS", "0") == "1" and 2000 <= len(_all_tok) <= 100_000:
+            _t0 = datetime.now()
+            _mdl = None
+            try:
+                import torch as _torch
+                from transformers import AutoModelForCausalLM as _AMC
+                from seq_quality_filter import compute_losses, iqr_filter
+
+                _mdl_path = training_request["train_request"]["model_path"]
+                try:
+                    _mdl = _AMC.from_pretrained(
+                        _mdl_path, torch_dtype=_torch.bfloat16
+                    ).to("cuda")
+                except Exception:
+                    _mdl = _AMC.from_pretrained(
+                        _mdl_path, torch_dtype=_torch.bfloat16,
+                        trust_remote_code=True, attn_implementation="eager",
+                    ).to("cuda")
+
+                _losses = compute_losses(_mdl, _all_tok)
+                del _mdl
+                _mdl = None
+                _torch.cuda.empty_cache()
+
+                _k_loss = float(os.environ.get("QF_LOSS_K", "2.5"))
+                _all_tok = iqr_filter(_all_tok, _losses, k=_k_loss)
+                print(
+                    f"[qf-loss] selesai dalam "
+                    f"{(datetime.now() - _t0).seconds}s (k={_k_loss})",
+                    flush=True,
+                )
+            except Exception as _qf_err:
+                print(f"[qf-loss] dilewati: {_qf_err}", flush=True)
+                try:
+                    if _mdl is not None:
+                        del _mdl
+                    import torch as _torch2
+                    _torch2.cuda.empty_cache()
+                except Exception:
+                    pass
+
         _dev_new, _train_new = length_stratified_split(
             _all_tok,
             dev_ratio=0.1,

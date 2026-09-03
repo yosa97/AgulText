@@ -835,10 +835,16 @@ def main():
             _end_dt = datetime.datetime.strptime(
                 train_request["end_time"], "%Y-%m-%d %H:%M:%S"
             )
+            # Cadangan final_dev: T2 3 Sep final_dev DILEWATI (sisa 91s < 120s)
+            # karena epoch planner memakai seluruh budget. Sisihkan ~240s agar
+            # final_dev (+eval & save terakhir) selalu kebagian waktu — blend
+            # α=0.3 ke dev bernilai ~0.5-1% loss, jangan hilang cuma-cuma.
+            _FINAL_DEV_RESERVE = float(os.environ.get("FINAL_DEV_RESERVE", "240"))
             _budget_secs = max(
                 0.0,
                 (_end_dt - datetime.datetime.now()).total_seconds()
-                - float(train_request.get("save_before_remaining_time", 3)) * 60.0,
+                - float(train_request.get("save_before_remaining_time", 3)) * 60.0
+                - _FINAL_DEV_RESERVE,
             )
             # t per OPTIMIZER step = t_micro × grad_accum; +20% margin untuk
             # overhead DDP sync + eval + save yang tidak terukur di probe

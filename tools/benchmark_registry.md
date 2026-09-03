@@ -68,3 +68,13 @@ Evaluator lokal mereproduksi angka winner 4 desimal → harness valid.
   panjang MAD merugikan (buang 330 dok terpanjang yang sah). Dibakukan: len-gate
   default OFF (QF_MAD_LEN=1 utk opt-in); near-dedup + deteksi degeneratif tetap ON
   (netral di data bersih, potensi besar di dataset kotor).
+- 2026-09-03 (T2 qwen3b): repro dgn near-dedup → 0.5695 vs Senin 0.5883 (−3.2%,
+  rank 10→~7). Dataset ru-AAQG: 4% exact-dup + 28.2% NEAR-DUP (16k sampel) —
+  bukti pertama near-dedup SimHash bekerja di data kotor. Winner 0.5277 (gap 7.9%):
+  duo teratas (0.5277/0.5281) terpisah jauh dari kluster — punya trik ekstra di
+  task QA-generatif; kandidat penyelidikan minggu depan.
+- 2026-09-03 (implementasi): (a) FINAL_DEV_RESERVE=240s di epoch planner —
+  final_dev tak boleh lagi tergusur; (b) QF_LOSS=1 filter loss berbasis model
+  (compute_losses ditulis ulang: padding + batch dinamis budget token by vocab,
+  sentinel -1 utk OOM; IQR k=2.5 via QF_LOSS_K). Default QF_LOSS MASIH 0 —
+  kalibrasi dulu di benchmark T2 (0.5695), menang → flip default sebelum Senin.

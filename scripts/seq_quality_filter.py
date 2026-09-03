@@ -248,61 +248,72 @@ def compute_losses(
     """
     F = torch.nn.functional
     model.eval()
-    losses: list[float] = []
     t0 = time.perf_counter()
-    bs = batch_size
 
-    def _to_tensor(x):
-        return x.to(device) if isinstance(x, torch.Tensor) else torch.tensor(x, device=device)
+    # Batching dinamis: sortir per panjang (desc), isi batch sampai budget token
+    # terpenuhi. Budget dihitung dari vocab agar memori logits terkendali
+    # (bf16: tokens × vocab × 2B; target ≤ ~5GB logits per batch).
+    _vocab = int(getattr(getattr(model, "config", None), "vocab_size", 50_000) or 50_000)
+    token_budget = max(2048, int(2_500_000_000 / _vocab))
+
+    def _ids(s, key):
+        v = s.get(key, [])
+        return v.tolist() if isinstance(v, torch.Tensor) else list(v)
+
+    n = len(samples)
+    losses = [0.0] * n
+    order = sorted(range(n), key=lambda i: len(samples[i].get("input_ids", [])), reverse=True)
 
     i = 0
-    while i < len(samples):
-        batch = samples[i : i + bs]
+    while i < n:
+        # bentuk batch: panjang maksimum = panjang elemen pertama (sorted desc)
+        max_len = max(2, len(samples[order[i]].get("input_ids", [])))
+        bsz = max(1, token_budget // max_len)
+        idxs = order[i : i + bsz]
         try:
-            input_ids = torch.stack([_to_tensor(s["input_ids"])      for s in batch])
-            attn      = torch.stack([_to_tensor(s["attention_mask"])  for s in batch])
-            labels    = torch.stack([_to_tensor(s["labels"])          for s in batch])
+            B = len(idxs)
+            input_ids = torch.zeros(B, max_len, dtype=torch.long, device=device)
+            attn      = torch.zeros(B, max_len, dtype=torch.long, device=device)
+            labels    = torch.full((B, max_len), -100, dtype=torch.long, device=device)
+            for j, si in enumerate(idxs):
+                ids = _ids(samples[si], "input_ids")[:max_len]
+                lbs = _ids(samples[si], "labels")[:max_len]
+                L = len(ids)
+                input_ids[j, :L] = torch.tensor(ids, device=device)
+                attn[j, :L] = 1
+                labels[j, : len(lbs)] = torch.tensor(lbs, device=device)
 
-            logits = model(input_ids=input_ids, attention_mask=attn).logits  # [B, T, V]
+            logits = model(input_ids=input_ids, attention_mask=attn).logits  # [B,T,V]
+            shift_logits = logits[:, :-1].reshape(-1, logits.size(-1))
+            shift_labels = labels[:, 1:].reshape(-1)
+            ce = F.cross_entropy(
+                shift_logits.float(), shift_labels,
+                ignore_index=-100, reduction="none",
+            ).view(B, -1)                                                    # [B,T-1]
+            mask = (labels[:, 1:] != -100)
+            for j, si in enumerate(idxs):
+                m = mask[j]
+                losses[si] = float(ce[j][m].mean()) if m.any() else 0.0
 
-            # Log-prob gather: hitung log P(token) untuk setiap posisi
-            # lalu ambil nilai untuk token target via gather → rata-rata NLL per sample
-            T         = logits.size(1) - 1                               # panjang setelah shift
-            log_probs  = F.log_softmax(logits[:, :T], dim=-1)            # [B, T-1, V]
-            target_ids = labels[:, 1:].clamp(min=0)                      # [B, T-1]
-            token_logp = log_probs.gather(
-                dim=-1,
-                index=target_ids.unsqueeze(-1),
-            ).squeeze(-1)                                                 # [B, T-1]
-
-            comp_mask = (labels[:, 1:] != -100)                          # [B, T-1] bool
-
-            for j in range(len(batch)):
-                m = comp_mask[j]
-                if m.sum() == 0:
-                    losses.append(0.0)
-                else:
-                    # NLL = rata-rata negative log-prob pada completion tokens
-                    losses.append(float(-token_logp[j][m].mean()))
-
-            del input_ids, attn, labels, logits, log_probs, target_ids, token_logp, comp_mask
-            torch.cuda.empty_cache()
-            i += bs
+            del input_ids, attn, labels, logits, shift_logits, shift_labels, ce, mask
+            i += bsz
 
         except torch.cuda.OutOfMemoryError:
-            if bs > 4:
-                bs = max(4, bs // 2)
-                print(f"[seq_quality] OOM → batch_size={bs}", flush=True)
-                torch.cuda.empty_cache()
+            torch.cuda.empty_cache()
+            if token_budget > 1024:
+                token_budget //= 2
+                print(f"[seq_quality] OOM → token_budget={token_budget}", flush=True)
                 continue
-            losses.extend([0.0] * len(batch))
-            i += len(batch)
+            for si in idxs:
+                losses[si] = -1.0  # sentinel: tak terukur → JANGAN difilter
+            i += len(idxs)
 
+    torch.cuda.empty_cache()
     elapsed = time.perf_counter() - t0
     n_valid = sum(1 for l in losses if l > 0)
     print(
-        f"[seq_quality] loss pass: {len(samples)} samples, {elapsed:.1f}s, "
-        f"{n_valid} dengan completion token",
+        f"[seq_quality] loss pass: {n} samples, {elapsed:.1f}s, "
+        f"{n_valid} dengan completion token (vocab={_vocab}, budget={token_budget} tok)",
         flush=True,
     )
     model.train()
@@ -326,11 +337,15 @@ def iqr_filter(
     Sample dengan loss=0 (tanpa completion token) selalu dibuang karena tidak
     memberikan gradien.
     """
-    # Pisahkan yang punya completion token
+    # Pisahkan yang punya completion token. loss<0 = sentinel "tak terukur"
+    # (OOM saat loss pass) → selalu dipertahankan tanpa ikut statistik IQR.
+    unmeasured = [s for s, l in zip(samples, losses) if l < 0]
     valid = [(s, l) for s, l in zip(samples, losses) if l > 0]
-    n_zero = len(samples) - len(valid)
+    n_zero = len(samples) - len(valid) - len(unmeasured)
     if n_zero:
         print(f"[seq_quality] buang {n_zero} sample loss=0 (tanpa completion token)", flush=True)
+    if unmeasured:
+        print(f"[seq_quality] {len(unmeasured)} sample tak terukur (OOM) → dipertahankan", flush=True)
 
     if len(valid) < min_samples:
         print(
@@ -338,7 +353,7 @@ def iqr_filter(
             f"(minimum {min_samples})",
             flush=True,
         )
-        return [s for s, _ in valid]
+        return [s for s, _ in valid] + unmeasured
 
     ls = sorted(l for _, l in valid)
     n = len(ls)
@@ -351,7 +366,7 @@ def iqr_filter(
             f"[seq_quality] IQR≈0 (semua loss ~{q1:.4f}), filter dilewati",
             flush=True,
         )
-        return [s for s, _ in valid]
+        return [s for s, _ in valid] + unmeasured
 
     lo = q1 - k * iqr
     hi = q3 + k * iqr
@@ -374,7 +389,7 @@ def iqr_filter(
         f"(-{len(dropped)}, {pct:.1f}% dibuang)",
         flush=True,
     )
-    return kept
+    return kept + unmeasured
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
