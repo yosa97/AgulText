@@ -106,3 +106,8 @@ QF_LOSS masih belum teruji murni (run qfloss2 ternyata kecelakaan env).
   RESEP SENIN TERKUNCI. Benchmark acuan: T1 falcon 1.5353 (rank~3),
   T2 qwen3b 0.5242 (rank 1). PR terbuka: QF_LOSS belum teruji murni;
   duo-T2 kemungkinan pakai resep serupa (data penuh) — margin kita tipis (1%).
+- 2026-09-04 (T3 bloomz): REGRESI ketahuan via benchmark — aturan 'eager→ckpt on'
+  terlalu pukul rata: bloom-560m muat tanpa ckpt (33GB atensi), dipaksa ckpt →
+  11.4s/step → 229 step → 2.855 vs 1.4304 kode lama (winner 1.3337). Fix:
+  estimasi memori atensi eager (bs×head×seq²×2×2×layer ≤ 40GB → ckpt boleh off).
+  Falcon 83GB → ckpt on ✓; bloom 33GB → ckpt off ✓. Rerun T3 utk validasi.

@@ -695,18 +695,30 @@ def main():
     # dikalibrasi empiris: SmolLM 49k vocab × 71k token ≈ 3.5e9 aman;
     # Qwen3 152k vocab × 71k token ≈ 1.1e10 OOM di H100 80GB.
     _vocab_size = int(getattr(model.config, "vocab_size", 32_000) or 32_000)
-    # Atensi eager (falcon-rw, phi-2, dll. yang FA-off) menyimpan matriks
-    # atensi kuadratik seq² per layer — tanpa grad-ckpt itu meledak (bukti:
-    # T1 31 Agu, falcon-rw-1b OOM kaskade bs12→6→3). Eager = ckpt wajib on.
+    # Atensi eager (falcon-rw, bloom, phi-2 — yang FA-off) menyimpan matriks
+    # atensi kuadratik bs×head×seq² per layer untuk backward. DIKALIBRASI dua
+    # arah: falcon-rw-1b (bs12×1536², 32 head, 24 layer ≈ 83GB) OOM tanpa ckpt
+    # (T1 31 Agu); bloom-560m (bs8×1664², 16 head ≈ 33GB) justru MUAT dan
+    # larangan buta membuatnya 10× lambat → skor T3 hancur 1.43→2.85 (4 Sep).
+    # Maka: estimasi memorinya, bukan larangan menyeluruh.
     _attn_impl = str(
         getattr(model.config, "_attn_implementation", "") or ""
     ).lower()
+    _eager_fits = True
+    if _attn_impl == "eager":
+        _n_heads = int(getattr(model.config, "num_attention_heads", 32) or 32)
+        _n_layers = int(getattr(model.config, "num_hidden_layers", 24) or 24)
+        _seq = int(max_length)
+        _bs = int(training_args.per_device_train_batch_size)
+        # bf16 (2B) × ~2 tensor (skor + prob) per layer, semua layer tersimpan
+        _eager_mem = _bs * _n_heads * _seq * _seq * 2 * 2 * _n_layers
+        _eager_fits = _eager_mem <= 40_000_000_000  # 40GB dari 80GB H100
     _gc_off = (_gc_mode == "0") or (
         _gc_mode == "auto"
         and _n_params <= 2_500_000_000
         and _tokens_per_microbatch <= 90_000
         and _tokens_per_microbatch * _vocab_size <= 6_000_000_000
-        and _attn_impl != "eager"   # eager: memori atensi kuadratik
+        and _eager_fits             # eager boleh, asal atensinya muat
         and kl_coef == 0.0          # jalur KL butuh headroom logits ganda
         and not training_args.use_lora  # LoRA sudah hemat; biarkan default
     )
