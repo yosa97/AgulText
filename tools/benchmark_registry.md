@@ -128,3 +128,9 @@ QF_LOSS masih belum teruji murni (run qfloss2 ternyata kecelakaan env).
   winner diduga seq statis pendek. Saklar FORCE_MAX_LEN ditambahkan; uji v5
   FORCE_MAX_LEN=768. Jika gagal juga → T3-class didokumentasikan sbg kelemahan
   tersisa, JANGAN utak-atik lagi sebelum Senin (T1/T2 sudah podium/menang).
+- 2026-09-04 (T3 v5, FORCE_MAX_LEN=768): dev 1.4277 (≈ skor Senin 1.4304!) tapi
+  test 2.567 — model sehat di distribusi train, GAP SISTEMATIS train↔test khusus
+  task ini. Winner 1.3337 tahu jembatannya. SESUAI PROTOKOL: STOP utak-atik.
+  T3-class = PR pasca-tournament. Data train+test diarsip ke archive_t3/ (URL
+  mati 7 Sep). FORCE_MAX_LEN tetap env-only. RESEP SENIN FINAL: T1 1.5353
+  (rank~3), T2 0.5152 (menang 2.4%), T3 ~2.7 (lemah, diterima).
