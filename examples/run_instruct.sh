@@ -247,7 +247,11 @@ echo ">>> Simulasi BASELINE_STATS_PATH aktif (dengan nilai null yang menguji par
 # Dataset type mirip tournament: field_instruction="instruct", field_input="input",
 # field_output="output". format dan no_input_format dibiarkan null (tidak di-set)
 # agar trainer pakai default — sama seperti yang dikirim validator tournament nyata.
-DATASET_TYPE='{"field_instruction":"instruct","field_input":"input","field_output":"output"}'
+# Bisa dioverride per-task — SAMAKAN dengan field di JSON task asli!
+# Temuan T3 4 Sep: field_input:"input" hardcoded padahal task asli
+# field_input:null → template prompt training ≠ template eval → model
+# tampak sehat di dev tapi hancur di test resmi (2.7 vs base 2.37).
+DATASET_TYPE="${DATASET_TYPE:-{\"field_instruction\":\"instruct\",\"field_input\":\"input\",\"field_output\":\"output\"}}"
 
 # ── Build image jika belum ada ─────────────────────────────────────────────
 if ! docker image inspect "$IMAGE_NAME" &>/dev/null; then

@@ -134,3 +134,15 @@ QF_LOSS masih belum teruji murni (run qfloss2 ternyata kecelakaan env).
   T3-class = PR pasca-tournament. Data train+test diarsip ke archive_t3/ (URL
   mati 7 Sep). FORCE_MAX_LEN tetap env-only. RESEP SENIN FINAL: T1 1.5353
   (rank~3), T2 0.5152 (menang 2.4%), T3 ~2.7 (lemah, diterima).
+- 2026-09-04 BISECT T3: oldcode 2.921 vs newcode 2.727 (BS_P99=2200) — TIDAK ADA
+  REGRESI (kode baru malah lebih baik). Misteri: Senin 7 miner @1.33-1.49, harness
+  tak bisa <2.5. Hipotesis: papan Senin ≈ loss base model (kluster rapat khas
+  base+noise); model harness 2.7 = training MERUSAK vs base (overfit format
+  packing?). Diagnostik: eval base bloomz-560m mentah.
+- 2026-09-04 AKAR T3 DITEMUKAN: base bloomz=2.370 → semua run harness (2.57-2.92)
+  LEBIH BURUK dari base, padahal tournament 1.33-1.49. Penyebab: harness hardcode
+  field_input:"input" sedangkan task asli field_input:null → template prompt
+  training ≠ eval. BUG HARNESS, bukan kode tournament (validator kirim type asli).
+  Fix: DATASET_TYPE kini overridable. PELAJARAN: benchmark harus menyalin
+  dataset_type PERSIS dari JSON task. Validasi: v6. (T1/T2 kemungkinan juga
+  sedikit terpengaruh — angka mereka bisa jadi UNDERESTIMATE kualitas kita.)
