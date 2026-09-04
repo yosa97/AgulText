@@ -111,3 +111,9 @@ QF_LOSS masih belum teruji murni (run qfloss2 ternyata kecelakaan env).
   11.4s/step → 229 step → 2.855 vs 1.4304 kode lama (winner 1.3337). Fix:
   estimasi memori atensi eager (bs×head×seq²×2×2×layer ≤ 40GB → ckpt boleh off).
   Falcon 83GB → ckpt on ✓; bloom 33GB → ckpt off ✓. Rerun T3 utk validasi.
+- 2026-09-04 (T3 akar): undertraining — floor epoch membuang 34 mnt (feasible
+  1.94→1 epoch), loss masih turun deras saat stop (4.74→1.55, grad_norm 9-12).
+  ga melonjak 8→21 dari seq-batch scaling (104k token/step). FIX: max_steps =
+  feasible (pecahan epoch, cap 6 epoch, lantai ½ epoch) + num_train_epochs=ceil
+  utk konsistensi callback. Dampak: T3 229→444 step (+94%), T2 667→991 (+49%).
+  Validasi: rerun T3 (target ≤1.43) LALU rerun T2 final (jaga 0.5242 tak regresi).

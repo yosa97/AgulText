@@ -875,23 +875,30 @@ def main():
                 * 1.20
             )
             _feasible_steps = _budget_secs / _t_opt_step
-            _planned_epochs = int(_feasible_steps // total_steps_per_epoch)
-            # Cap epoch: lebih dari ~6 epoch pada SFT hampir selalu overfit
-            # (test 3000 sampel: 125 epoch feasible → eval naik 2.37→4.35 padahal
-            # best tercapai di epoch ~6). Waktu berlebih lebih baik tidak dipakai
-            # daripada dipakai overfit. Winner pakai 3 statis; kita 6 karena eval
-            # callback tetap menyimpan best checkpoint sebagai pengaman.
+            # PECAHAN EPOCH via max_steps — bukan pembulatan epoch ke bawah.
+            # T3 4 Sep: feasible 1.94 epoch di-floor jadi 1 → 34 menit budget
+            # terbuang, loss masih turun deras saat berhenti → 2.86 vs 1.43.
+            # max_steps memakai seluruh budget; scheduler decay pas ke horizon.
+            # Cap 6 epoch tetap (>6 epoch SFT hampir selalu overfit — test 27 Jul).
             _EPOCH_CAP = 6
-            _planned_epochs = max(1, min(_planned_epochs, _EPOCH_CAP, int(training_args.num_train_epochs)))
-            if _planned_epochs < int(training_args.num_train_epochs):
+            _new_total = max(
+                total_steps_per_epoch // 2,  # lantai keamanan: minimal ½ epoch
+                min(int(_feasible_steps), _EPOCH_CAP * total_steps_per_epoch),
+            )
+            if _new_total < int(total_steps_all_epochs):
                 log_info(
                     f"[epoch_plan] t_opt_step≈{_t_opt_step:.2f}s, "
-                    f"budget={_budget_secs:.0f}s → epochs {training_args.num_train_epochs} "
-                    f"→ {_planned_epochs}"
+                    f"budget={_budget_secs:.0f}s → max_steps={_new_total} "
+                    f"(≈{_new_total / total_steps_per_epoch:.2f} epoch, "
+                    f"feasible={_feasible_steps:.0f})"
                 )
-                training_args.num_train_epochs = float(_planned_epochs)
-                # Recompute warmup dengan horizon step yang baru
-                _new_total = total_steps_per_epoch * _planned_epochs
+                training_args.max_steps = int(_new_total)
+                # num_train_epochs = ceil, agar aritmetika eval-callback
+                # (total/epochs) tetap ≈ steps_per_epoch. HF memprioritaskan
+                # max_steps, jadi nilai ini hanya untuk konsistensi callback.
+                training_args.num_train_epochs = float(
+                    max(1, -(-int(_new_total) // total_steps_per_epoch))
+                )
                 # KRITIS: _eval_callback dibuat sebelum epoch planning dengan
                 # total_steps_all_epochs berbasis 999 epoch. Callback menghitung
                 # steps_per_epoch = total_steps_all_epochs / num_train_epochs —
