@@ -141,7 +141,21 @@ def simhash_near_dedup(
         kept.append(s)
 
     dt = time.perf_counter() - t0
-    pct = 100 * n_near / max(1, len(samples))
+    frac = n_near / max(1, len(samples))
+    # PAGAR TERKALIBRASI (T2 3 Sep): rate near-dup tinggi = dataset sintetis
+    # yang "duplikatnya" se-distribusi dengan test set → MEMBUANGNYA MERUGIKAN
+    # (0.5654 vs 0.5227 tanpa buang; winner 0.5278). Rate rendah (T1: 0.1%) =
+    # duplikat organik sungguhan → aman dibuang. Ambang via NEAR_DEDUP_CAP.
+    cap = float(os.environ.get("NEAR_DEDUP_CAP") or 0.10)
+    if frac > cap:
+        print(
+            f"[seq_quality] near-dedup: terdeteksi {frac:.1%} > cap {cap:.0%} — "
+            f"indikasi data sintetis in-distribution → TIDAK ada yang dibuang "
+            f"({dt:.1f}s)",
+            flush=True,
+        )
+        return samples
+    pct = 100 * frac
     print(
         f"[seq_quality] near-dedup (simhash r={hamming_radius}): "
         f"{len(samples)} → {len(kept)} (-{n_near}, {pct:.1f}%) dalam {dt:.1f}s",

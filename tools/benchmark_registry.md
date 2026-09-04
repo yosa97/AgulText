@@ -88,3 +88,16 @@ Evaluator lokal mereproduksi angka winner 4 desimal → harness valid.
   0.5827<0.6292). Hipotesis: ini trik duo teratas (pola WSD/SWA). Semua env
   di-harden (`or` default); saklar NO_DECAY=1 ditambahkan utk uji sengaja.
   Baseline T2 terbaik: 0.5311 (konfigurasi belum resmi — perlu reproduksi sengaja).
+
+### MATRIKS T2 LENGKAP (4 Sep) — MENGALAHKAN WINNER
+| dedup | decay | loss |
+|---|---|---|
+| on  | on  | 0.5654 |
+| on  | off | 0.5720 |
+| off | on  | **0.5227** ← menang vs winner 0.5278 |
+| off | off | **0.5225** ← menang vs winner 0.5278 |
+Kesimpulan: (1) near-dedup di data sintetis MERUGIKAN — "near-dup" = data sah
+se-distribusi test. (2) decay vs no-decay = noise; decay+epoch-plan tetap default.
+DIBAKUKAN: NEAR_DEDUP_CAP=0.10 — deteksi >10% → tidak membuang apa pun (T2),
+≤10% → buang normal (T1). NO_DECAY tetap env eksperimen, bukan default.
+QF_LOSS masih belum teruji murni (run qfloss2 ternyata kecelakaan env).
