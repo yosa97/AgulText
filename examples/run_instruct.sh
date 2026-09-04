@@ -301,6 +301,7 @@ docker run --rm \
     -e GRAD_CKPT="${GRAD_CKPT:-}" \
     -e EMA="${EMA:-}" \
     -e NO_DECAY="${NO_DECAY:-}" \
+    -e FORCE_MAX_LEN="${FORCE_MAX_LEN:-}" \
     -e HF_HUB_ENABLE_HF_TRANSFER=1 \
     -e TASK_ID="$TASK_ID" \
     -e MODEL="$MODEL" \

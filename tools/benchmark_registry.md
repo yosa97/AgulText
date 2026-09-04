@@ -122,3 +122,9 @@ QF_LOSS masih belum teruji murni (run qfloss2 ternyata kecelakaan env).
   memakan reserve; t_opt estimasi 4.45 vs real ~4.6) — diterima, skor terbukti.
   T3 v3 GAGAL karena DUA RUN BERSAMAAN di 1 VM (berbagi internal_datasets +
   1 GPU) — bukan bug kode. ATURAN: satu benchmark pada satu waktu. Rerun = v4.
+- 2026-09-04 (T3 v4): max_steps 444 → 2.716 (dari 2.855) — masih jauh dari 1.43.
+  Anomali kunci: dev internal 1.65 vs test 2.72 (T1/T2 selaras). Hipotesis akhir:
+  max_length 1664 di bloom-eager → 15k tok/s (lambat) + mismatch distribusi;
+  winner diduga seq statis pendek. Saklar FORCE_MAX_LEN ditambahkan; uji v5
+  FORCE_MAX_LEN=768. Jika gagal juga → T3-class didokumentasikan sbg kelemahan
+  tersisa, JANGAN utak-atik lagi sebelum Senin (T1/T2 sudah podium/menang).

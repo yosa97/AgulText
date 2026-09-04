@@ -109,6 +109,16 @@ def compute_adaptive_max_length(
     # → kehilangan data ekor (jawaban panjang) yang justru sering muncul di test
     # set → eval loss memburuk. p99×1.1 menyisakan <1% terdampak; kepadatan
     # packing minimal 2 sampel/blok dijaga lewat floor 2×p50.
+    # FORCE_MAX_LEN: override eksperimen (kalibrasi T3 4 Sep — hipotesis:
+    # max_length besar di model kecil + atensi eager membuat token/detik anjlok
+    # DAN distribusi train melenceng dari test; winner diduga pakai seq statis
+    # pendek). Hanya via env, bukan default.
+    _force = os.environ.get("FORCE_MAX_LEN") or ""
+    if _force:
+        forced = max(256, (int(_force) // 64) * 64)
+        print(f"[seq_analyzer] FORCE_MAX_LEN={_force} → max_length={forced}", flush=True)
+        return forced
+
     if packing:
         raw_target = int(max(p99, 2 * p50) * 1.1)
     else:
