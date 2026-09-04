@@ -117,3 +117,8 @@ QF_LOSS masih belum teruji murni (run qfloss2 ternyata kecelakaan env).
   feasible (pecahan epoch, cap 6 epoch, lantai ½ epoch) + num_train_epochs=ceil
   utk konsistensi callback. Dampak: T3 229→444 step (+94%), T2 667→991 (+49%).
   Validasi: rerun T3 (target ≤1.43) LALU rerun T2 final (jaga 0.5242 tak regresi).
+- 2026-09-04: T2 final2 (max_steps) = **0.5152** — rekor, 2.4% di bawah winner
+  0.5278. Soup avg menang lagi. Catatan: final_dev tetap ter-skip (max_steps
+  memakan reserve; t_opt estimasi 4.45 vs real ~4.6) — diterima, skor terbukti.
+  T3 v3 GAGAL karena DUA RUN BERSAMAAN di 1 VM (berbagi internal_datasets +
+  1 GPU) — bukan bug kode. ATURAN: satu benchmark pada satu waktu. Rerun = v4.
