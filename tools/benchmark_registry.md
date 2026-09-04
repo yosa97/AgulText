@@ -101,3 +101,8 @@ se-distribusi test. (2) decay vs no-decay = noise; decay+epoch-plan tetap defaul
 DIBAKUKAN: NEAR_DEDUP_CAP=0.10 — deteksi >10% → tidak membuang apa pun (T2),
 ≤10% → buang normal (T1). NO_DECAY tetap env eksperimen, bukan default.
 QF_LOSS masih belum teruji murni (run qfloss2 ternyata kecelakaan env).
+- 2026-09-04 VALIDASI FINAL: konfigurasi DEFAULT (tanpa env) di T2 = 0.5242
+  < winner 0.5278. Pagar NEAR_DEDUP_CAP terbukti bekerja di run nyata.
+  RESEP SENIN TERKUNCI. Benchmark acuan: T1 falcon 1.5353 (rank~3),
+  T2 qwen3b 0.5242 (rank 1). PR terbuka: QF_LOSS belum teruji murni;
+  duo-T2 kemungkinan pakai resep serupa (data penuh) — margin kita tipis (1%).
