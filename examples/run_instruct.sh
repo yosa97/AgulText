@@ -251,7 +251,8 @@ echo ">>> Simulasi BASELINE_STATS_PATH aktif (dengan nilai null yang menguji par
 # Temuan T3 4 Sep: field_input:"input" hardcoded padahal task asli
 # field_input:null → template prompt training ≠ template eval → model
 # tampak sehat di dev tapi hancur di test resmi (2.7 vs base 2.37).
-DATASET_TYPE="${DATASET_TYPE:-{\"field_instruction\":\"instruct\",\"field_input\":\"input\",\"field_output\":\"output\"}}"
+DATASET_TYPE_DEFAULT='{"field_instruction":"instruct","field_input":"input","field_output":"output"}'
+DATASET_TYPE="${DATASET_TYPE:-$DATASET_TYPE_DEFAULT}"
 
 # ── Build image jika belum ada ─────────────────────────────────────────────
 if ! docker image inspect "$IMAGE_NAME" &>/dev/null; then
