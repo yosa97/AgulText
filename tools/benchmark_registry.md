@@ -146,3 +146,20 @@ QF_LOSS masih belum teruji murni (run qfloss2 ternyata kecelakaan env).
   Fix: DATASET_TYPE kini overridable. PELAJARAN: benchmark harus menyalin
   dataset_type PERSIS dari JSON task. Validasi: v6. (T1/T2 kemungkinan juga
   sedikit terpengaruh — angka mereka bisa jadi UNDERESTIMATE kualitas kita.)
+- 2026-09-05 (T3 v7): hipotesis template GUGUR — v7 (field_input null) identik
+  bit-per-bit dgn default (data tak punya kolom input → no_input_format dipakai
+  di kedua kasus). MISTERI T3 TETAP: tournament 1.33-1.49 vs harness ≥2.57
+  (base 2.37). Fakta kunci: jalur TOURNAMENT terbukti sehat (kode kita 1.4304
+  Senin); diskrepansi hanya di harness lokal utk task ini. PR pasca-tournament:
+  bandingkan konfigurasi submission Senin (5EFLCMFD) vs output harness; data
+  diarsip di archive_t3/. PENGUNCIAN: tidak ada perubahan lagi sampai tournament.
+- 2026-09-05 KONTROL FINAL: submission Senin kita (5EFLCMFD) = 1.4303 lokal —
+  persis papan. Model tournament ASLI & terlatih baik. Diskrepansi murni harness
+  lokal (T3-class). KASUS DITUTUP sampai pasca-tournament. STATUS KUNCI:
+  T1 1.5353 (podium) · T2 0.5152 (juara benchmark) · T3 jalur tournament sehat.
+- 2026-09-05 MATRIKS GENERALISASI (3 run, 15/15 semua): Qwen3-4B-Base×Dolly
+  (boss family ukuran nyata, 1.34), Qwen2.5-7B×Alpaca (bracket 5-9B lolos
+  attempt-1 di 1×H100, cap 6 epoch bekerja, 1.36), Llama-3.2-1B×Dolly (kolom
+  input terisi, 1.96). Cakupan total: 13 keluarga arch × ukuran 0.5-7.6B ×
+  4 bentuk dataset. "RuntimeError: 0 active drivers" = cleanup Triton pasca-
+  selesai, jinak. SIAP TOURNAMENT.
