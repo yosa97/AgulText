@@ -163,3 +163,16 @@ QF_LOSS masih belum teruji murni (run qfloss2 ternyata kecelakaan env).
   input terisi, 1.96). Cakupan total: 13 keluarga arch × ukuran 0.5-7.6B ×
   4 bentuk dataset. "RuntimeError: 0 active drivers" = cleanup Triton pasca-
   selesai, jinak. SIAP TOURNAMENT.
+- 2026-09-05 UPDATE G.O.D (constants.py): FEE TEXT NAIK 0.35→0.7 TAO (siapkan
+  ≥0.75). Validator kini MENOLAK task dgn near-dup ≥20% → dataset kelas-T2 tak
+  akan muncul; cap 0.10 kita tetap pas utk rentang 10-20%. Boss round baru:
+  3 instruct (1 dipaksa 35-71B!) + DPO + GRPO + continuous-SFT Qwen3-14B;
+  pre-boss pair = Qwen3-32B → jalur dalam butuh multi-GPU/DDP (PR lama).
+  Dethrone: paired per-example (win-rate ≥55%, gap ≥0.01 nats). Jadwal tetap
+  Senin 11:00 UTC.
+- 2026-09-06 UJI 2×H100: (1) DDP LULUS — world_size:2, soup/overfit-guard/rollback
+  benar di kedua rank, 15/15 → risiko #1 registry GUGUR. (2) 32B LoRA: BOM
+  ditemukan — print_trainable_parameters tak pernah didefinisikan; jalur LoRA
+  belum pernah tereksekusi → NameError → fallback noise. FATAL utk boss round
+  baru (instruct 35-71B dipaksa LoRA). FIX: model.print_trainable_parameters()
+  (API peft) + guard. Rerun 32B utk validasi.

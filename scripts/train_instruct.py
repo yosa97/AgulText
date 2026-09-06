@@ -299,7 +299,13 @@ def load_lora_model(training_args: TrainingArguments, model_path: str, lora_args
     if hasattr(model.config, "output_router_logits"):
         setattr(model.config, "output_router_logits", True)
 
-    print_trainable_parameters(model)
+    # Fungsi lama print_trainable_parameters tak pernah didefinisikan — jalur
+    # LoRA belum pernah tereksekusi sampai uji 32B 6 Sep (NameError → 6 attempt
+    # gagal → fallback noise). Gunakan API peft langsung, dibungkus aman.
+    try:
+        model.print_trainable_parameters()
+    except Exception:
+        pass
     return model
 
 
