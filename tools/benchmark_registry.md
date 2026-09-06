@@ -188,3 +188,7 @@ QF_LOSS masih belum teruji murni (run qfloss2 ternyata kecelakaan env).
   boss round 35-71B). Fix: tulis ulang ke ID HF ('--'→'/' sekali) di
   train_instruct (load_lora_model), train_dpo & train_grpo (pasca-DPOTrainer/
   GRPOTrainer). Verifikasi cukup: rerun 32B singkat & cat adapter_config.
+- 2026-09-06 VERIFIKASI FINAL LoRA: adapter_config kini berisi ID HF yang benar
+  ("Qwen/Qwen2.5-32B-Instruct"). Jalur LoRA 32B end-to-end SEHAT. Kampanye uji
+  pra-tournament SELESAI TOTAL: DDP ✓ · LoRA ✓ · DPO/GRPO multi-GPU ✓ ·
+  13 keluarga ✓ · benchmark T1/T2 podium/juara ✓ · 2 bug DNF-pasti dijinakkan.
