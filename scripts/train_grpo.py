@@ -510,8 +510,24 @@ def main():
                 train_request["model_name"],
                 max_steps
             )
+
         ],
     )
+
+    # KRITIS (fix 6 Sep, sama dgn train_instruct): peft merekam path lokal
+    # /cache/models/Org--Model sebagai base_model_name_or_path di
+    # adapter_config.json; evaluator validator membutuhkan ID HF asli.
+    try:
+        _bdir = os.path.basename(str(train_request["model_path"]).rstrip("/"))
+        _m = getattr(trainer, "model", None)
+        if "--" in _bdir and _m is not None and hasattr(_m, "peft_config"):
+            _hf = _bdir.replace("--", "/", 1)
+            for _pc in _m.peft_config.values():
+                _pc.base_model_name_or_path = _hf
+            print(f"[lora] base_model_name_or_path -> {_hf}", flush=True)
+    except Exception as _e:
+        print(f"[lora] rewrite base gagal: {_e}", flush=True)
+
 
     trainer.train()
     

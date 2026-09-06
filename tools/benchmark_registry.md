@@ -176,3 +176,15 @@ QF_LOSS masih belum teruji murni (run qfloss2 ternyata kecelakaan env).
   belum pernah tereksekusi → NameError → fallback noise. FATAL utk boss round
   baru (instruct 35-71B dipaksa LoRA). FIX: model.print_trainable_parameters()
   (API peft) + guard. Rerun 32B utk validasi.
+- 2026-09-06 (lanjutan 2×H100): 32B LoRA rerun SUKSES (loss 1.298, tanpa retry,
+  soup jalan, ZeRO-3 2 rank). Submission = adapter murni — VALID: evaluator
+  punya AutoPeftModelForCausalLM + deteksi adapter_config (common.py:260-327).
+  Cek "config.json" di harness = false alarm utk jalur LoRA. DPO & GRPO
+  multi-GPU selesai (loss.txt terisi). Sisa verifikasi: base_model_name_or_path
+  di adapter_config harus ID HF, bukan path lokal /cache/... (risiko DNF).
+- 2026-09-06 FIX TERAKHIR: adapter_config.json merekam base_model_name_or_path =
+  path lokal /cache/models/Org--Model → evaluator (AutoPeftModelForCausalLM,
+  common.py:318) membacanya apa adanya → DNF utk semua submission LoRA (32B+,
+  boss round 35-71B). Fix: tulis ulang ke ID HF ('--'→'/' sekali) di
+  train_instruct (load_lora_model), train_dpo & train_grpo (pasca-DPOTrainer/
+  GRPOTrainer). Verifikasi cukup: rerun 32B singkat & cat adapter_config.

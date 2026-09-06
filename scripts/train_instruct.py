@@ -291,6 +291,22 @@ def load_lora_model(training_args: TrainingArguments, model_path: str, lora_args
 
     model = get_peft_model(model, lora_config)
 
+    # KRITIS (uji 32B, 6 Sep): model dimuat dari path lokal /cache/models/
+    # Qwen--Qwen2.5-32B-Instruct, dan peft merekam path itu sebagai
+    # base_model_name_or_path di adapter_config.json. Evaluator validator
+    # (AutoPeftModelForCausalLM) membaca field itu apa adanya untuk mengunduh
+    # base dari HF — path lokal = gagal load = DNF. Konvensi downloader:
+    # nama dir = model_id dengan '/'→'--', jadi kembalikan ke ID HF aslinya.
+    try:
+        _base_dir = os.path.basename(str(model_path).rstrip("/"))
+        if "--" in _base_dir:
+            _hf_id = _base_dir.replace("--", "/", 1)
+            for _pc in model.peft_config.values():
+                _pc.base_model_name_or_path = _hf_id
+            log_info(f"[lora] base_model_name_or_path → {_hf_id}")
+    except Exception as _bm_err:
+        log_info(f"[lora] gagal menulis base_model_name_or_path: {_bm_err}")
+
     if training_args.gradient_checkpointing:
         model.enable_input_require_grads()
 
