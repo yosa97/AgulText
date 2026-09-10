@@ -192,3 +192,14 @@ QF_LOSS masih belum teruji murni (run qfloss2 ternyata kecelakaan env).
   ("Qwen/Qwen2.5-32B-Instruct"). Jalur LoRA 32B end-to-end SEHAT. Kampanye uji
   pra-tournament SELESAI TOTAL: DDP ✓ · LoRA ✓ · DPO/GRPO multi-GPU ✓ ·
   13 keluarga ✓ · benchmark T1/T2 podium/juara ✓ · 2 bug DNF-pasti dijinakkan.
+
+## Tournament 7 Sep 2026 (tourn_2ba0f79237bffcf7) — Group Stage, 12 miner, hotkey baru 5CcwdezW
+| Task | Model | Dataset | Loss kita | Rank | Winner | Kluster |
+|---|---|---|---|---|---|---|
+| 29fc1a10 | LiquidAI/LFM2.5-2.6B | indic-instruct | 1.2877 | 5/12 | 1.2329 | 1.23-1.29 |
+| ef9824ae | unsloth/SmolLM2-360M | llama3-jailbreaks | 1.2108 | 12/12 ⚠ | 0.8811 | 0.88-0.99 |
+| 59469903 | unsloth/gemma-2-2b | Hidden | 0.0486 | 7/12 | 0.0454 | 0.045-0.058 |
+Catatan: 0 DNF. LFM tak lagi eksklusif (semua miner bisa). ANOMALI ke-2 kelas
+model-mini (setelah bloomz-560m): SmolLM2-360M +30% dari kluster — pola sistematis.
+Data T2 diarsip archive_t2_0907/ (URL mati ~14 Sep). Medan naik: 12 miner, top-4
+hotkey baru. Repro: bench-t2-0907-smol.
