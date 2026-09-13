@@ -228,3 +228,10 @@ hotkey baru. Repro: bench-t2-0907-smol.
   publik bisa dibongkar via pickletools tanpa torch → resep LR/epoch/scheduler
   semua peserta terbaca. CONSOLIDATED ala teman-teman user bisa kita bangun
   sendiri dari sumber publik.
+- 2026-09-13 (T2-0907 v2): dev 0.9501 (rekor task ini) TAPI eval resmi 1.3837
+  (LEBIH BURUK dari tournament 1.2108) — tanda tangan penyakit model-mini:
+  dev↑ test↓ = menghafal. TERSANGKA UTAMA BARU: LR estimator meledak di model
+  mini (w_rms 0.179 → LR 7.77e-4; model besar ~5e-5) → memorization. Konsisten
+  dgn semua kasus mini (bloomz, SmolLM2) & kluster normal para peserta lain.
+  Ablasi penentu: coldlr (LR_SAFETY_DIV=8 BLEND_W=1.0 → ~1.3e-4) sebelum URL
+  mati 14 Sep ~14:15 UTC. Jika berhasil → patch: cap LR utk params <1B.
