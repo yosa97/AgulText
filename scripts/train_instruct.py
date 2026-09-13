@@ -465,12 +465,26 @@ def main():
         _dstats = (_baseline_stats.get("dataset") or {}) if _baseline_stats else {}
         _ptok = float(_dstats.get("prompt_tokens") or _baseline_stats.get("prompt_tokens") or 0)
         _ctok = float(_dstats.get("completion_tokens") or _baseline_stats.get("completion_tokens") or 0)
-        if _ctok > 0 and (_ptok / _ctok) > 5.0:
+        # PAGAR (analisis T2 SmolLM2 7 Sep, rank 12/12 +30% dari kluster):
+        # pada data prompt-raksasa + completion-PENDEK (jailbreak/refusal),
+        # membuka token prompt membuat massa loss didominasi pemodelan prompt
+        # alih-alih completion yang dinilai eval. PLW hanya masuk akal bila
+        # completion cukup panjang untuk tetap dominan. Syarat tambahan:
+        # rata-rata completion ≥ 48 token, dan massa prompt yang dibuka
+        # (frac × ptok) ≤ 20% massa completion. PLW_MIN_CTOK utk override.
+        _min_ctok = float(os.environ.get("PLW_MIN_CTOK") or 48)
+        if _ctok > 0 and (_ptok / _ctok) > 5.0 and _ctok >= _min_ctok:
             _pc_ratio = _ptok / _ctok
             _plw_frac = 0.05 / max(1.0, _pc_ratio / 5.0)
+            _plw_frac = min(_plw_frac, 0.20 * _ctok / max(1.0, _ptok))
             from seq_quality_filter import stride_unmask_prompt
             train_ds.eval_dataset = stride_unmask_prompt(train_ds.eval_dataset, _plw_frac)
             log_info(f"[plw] prompt:completion={_pc_ratio:.1f}:1 → stride-unmask fraksi={_plw_frac:.4f}")
+        elif _ctok > 0 and (_ptok / _ctok) > 5.0:
+            log_info(
+                f"[plw] DILEWATI: completion rata-rata {_ctok:.0f} tok < {_min_ctok:.0f} "
+                f"— data prompt-dominan ber-completion pendek (pagar T2 7 Sep)"
+            )
     except Exception as _plw_err:
         log_info(f"[plw] dilewati: {_plw_err}")
     

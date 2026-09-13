@@ -203,3 +203,12 @@ Catatan: 0 DNF. LFM tak lagi eksklusif (semua miner bisa). ANOMALI ke-2 kelas
 model-mini (setelah bloomz-560m): SmolLM2-360M +30% dari kluster — pola sistematis.
 Data T2 diarsip archive_t2_0907/ (URL mati ~14 Sep). Medan naik: 12 miner, top-4
 hotkey baru. Repro: bench-t2-0907-smol.
+- 2026-09-13 (tanpa GPU): (a) PAGAR PLW — skip bila completion rata <48 tok
+  (PLW_MIN_CTOK) + cap massa prompt terbuka ≤20% massa completion; hipotesis
+  utama anomali T2 SmolLM2 (+30%): PLW memodelkan teks jailbreak alih-alih
+  refusal pendek yang dinilai eval. (b) [data-diag] log-only di tokenize:
+  marker template + rasio p:c + panjang output — evidence otomatis di semua
+  run tournament berikutnya. Catatan analisis: train & eval memakai format
+  dataset yang SAMA by construction → "chat template alignment" murni kecil
+  kemungkinannya jadi akar; PLW adalah pembeda nyata kita vs kluster.
+  Validasi tertunda sampai GPU tersedia (arsip T2-0907 dipertahankan).

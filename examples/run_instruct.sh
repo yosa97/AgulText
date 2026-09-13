@@ -307,6 +307,7 @@ docker run --rm \
     -e EMA="${EMA:-}" \
     -e NO_DECAY="${NO_DECAY:-}" \
     -e FORCE_MAX_LEN="${FORCE_MAX_LEN:-}" \
+    -e PLW_MIN_CTOK="${PLW_MIN_CTOK:-}" \
     -e HF_HUB_ENABLE_HF_TRANSFER=1 \
     -e TASK_ID="$TASK_ID" \
     -e MODEL="$MODEL" \

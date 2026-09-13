@@ -247,6 +247,45 @@ def main(training_request_path: str):
     # dataset is already downloaded at: training_request["train_request"]["dataset"]
     task_id = training_request["train_request"]["task_id"]
     total_path = training_request["train_request"]["dataset"]
+
+    # ── Diagnostik bentuk data (log-only, tanpa efek) ────────────────────────
+    # Tercetak di SEMUA run termasuk tournament → evidence gratis utk otopsi:
+    # (a) marker chat-template di teks mentah, (b) rasio prompt:completion,
+    # (c) panjang output. Lahir dari misteri T2 SmolLM2 7 Sep (rank 12,
+    # +30% dari kluster) yang tak sempat terdiagnosis karena URL data mati.
+    try:
+        with open(total_path) as _f:
+            _raw = json.load(_f)
+        _n = len(_raw)
+        _markers = {
+            "llama3": ("<|start_header_id|>", "<|eot_id|>"),
+            "chatml": ("<|im_start|>", "<|im_end|>"),
+            "gemma": ("<start_of_turn>", "<end_of_turn>"),
+            "mistral": ("[INST]", "[/INST]"),
+            "phi": ("<|user|>", "<|assistant|>"),
+        }
+        _hits = dict.fromkeys(_markers, 0)
+        _ratios, _olens = [], []
+        for _s in _raw[: min(_n, 20000)]:
+            _p = str(_s.get("instruct") or "") + " " + str(_s.get("input") or "")
+            _o = str(_s.get("output") or "")
+            for _fam, _ms in _markers.items():
+                if any(_m in _p or _m in _o for _m in _ms):
+                    _hits[_fam] += 1
+            _ratios.append(len(_p) / max(1, len(_o)))
+            _olens.append(len(_o))
+        _ratios.sort(); _olens.sort()
+        _k = len(_ratios)
+        _tpl = {f: h for f, h in _hits.items() if h}
+        print(
+            f"[data-diag] n={_n} | template={_tpl if _tpl else 'tidak terdeteksi'} | "
+            f"rasio p:c(char) p50={_ratios[_k // 2]:.1f} p90={_ratios[int(_k * .9)]:.1f} | "
+            f"output(char) p10={_olens[_k // 10]} p50={_olens[_k // 2]}",
+            flush=True,
+        )
+        del _raw
+    except Exception as _dd_err:
+        print(f"[data-diag] dilewati: {_dd_err}", flush=True)
     train_path = f"datasets/train_{task_id}.json"
     dev_path = f"datasets/dev_{task_id}.json"
     max_data_size = training_request["train_request"].get("max_data_size", -1)
