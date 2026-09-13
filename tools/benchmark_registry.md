@@ -212,3 +212,19 @@ hotkey baru. Repro: bench-t2-0907-smol.
   dataset yang SAMA by construction → "chat template alignment" murni kecil
   kemungkinannya jadi akar; PLW adalah pembeda nyata kita vs kluster.
   Validasi tertunda sampai GPU tersedia (arsip T2-0907 dipertahankan).
+- 2026-09-13 (audit repo winner utk "trik"): (a) MITOS DIPATAHKAN — winner TIDAK
+  pakai trik chat-template di instruct; jalur chat_template mereka identik milik
+  kita (hanya utk CHATTASK yang template-nya ditentukan validator). (b) TEKNIK
+  NYATA ditemukan: smart_truncate winner memotong dari SISI PROMPT, completion
+  utuh. Kita implementasi BERBEDA (jendela-belakang via monkeypatch PackedDataset
+  guard; completion>pack → jendela dari awal completion) — uji unit 2 kasus lulus.
+  (c) Threshold PLW winner >10 (riset 2024) — kita naikkan 5→10, melengkapi pagar
+  completion-pendek. Validasi GPU tertunda; semua perubahan bersifat memperketat/
+  memperbaiki-arah sehingga aman utk tournament berikutnya.
+- 2026-09-13 (intel publik): tokenizer_config winner T2-mini (5GcAxvH7) vs kita
+  = IDENTIK (pad <|PAD_TOKEN|> bawaan unsloth, padding left, TANPA chat_template)
+  → hipotesis template & pad/eos MATI utk task ini. Sisa pembeda: dinamika
+  training (LR/step/PLW). Teknik intel baru: training_args.bin tiap submission
+  publik bisa dibongkar via pickletools tanpa torch → resep LR/epoch/scheduler
+  semua peserta terbaca. CONSOLIDATED ala teman-teman user bisa kita bangun
+  sendiri dari sumber publik.

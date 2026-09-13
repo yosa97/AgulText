@@ -285,16 +285,31 @@ class PackedDataset(Dataset):
             input_length = len(dp["input_ids"])
             assert input_length == len(dp["attention_mask"]) == len(dp["labels"])
             if input_length > self.pack_length:
-                dp = {
-                    "input_ids": list(dp["input_ids"])[: self.pack_length],
-                    "attention_mask": list(dp["attention_mask"])[: self.pack_length],
-                    "labels": list(dp["labels"])[: self.pack_length],
-                }
-                if all(_l == -100 for _l in dp["labels"]):
+                # Potong dari SISI PROMPT, pertahankan completion (13 Sep).
+                # Potongan kanan lama memenggal EKOR completion — pada task
+                # math/reasoning/kode itu jawabannya sendiri. Pendekatan:
+                # ambil JENDELA BELAKANG sepanjang pack_length (completion di
+                # ujung → otomatis utuh + ekor prompt sebanyak sisa budget).
+                # Jika completion sendiri > pack_length, ambil jendela yang
+                # dimulai di awal completion (kepala jawaban lebih bernilai
+                # daripada prompt + jawaban buntung).
+                _labs = list(dp["labels"])
+                _comp_len = sum(1 for _l in _labs if _l != -100)
+                if _comp_len == 0:
                     n_drop += 1
                     continue
+                if _comp_len >= self.pack_length:
+                    _start = next(_i for _i, _l in enumerate(_labs) if _l != -100)
+                else:
+                    _start = input_length - self.pack_length
+                _end = _start + self.pack_length
+                dp = {
+                    "input_ids": list(dp["input_ids"])[_start:_end],
+                    "attention_mask": list(dp["attention_mask"])[_start:_end],
+                    "labels": _labs[_start:_end],
+                }
                 n_trunc += 1
-                input_length = self.pack_length
+                input_length = len(dp["input_ids"])
             self.data_points.append(dp)
             self.lengths.append(input_length)
         if n_trunc or n_drop:

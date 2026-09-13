@@ -473,14 +473,14 @@ def main():
         # rata-rata completion ≥ 48 token, dan massa prompt yang dibuka
         # (frac × ptok) ≤ 20% massa completion. PLW_MIN_CTOK utk override.
         _min_ctok = float(os.environ.get("PLW_MIN_CTOK") or 48)
-        if _ctok > 0 and (_ptok / _ctok) > 5.0 and _ctok >= _min_ctok:
+        if _ctok > 0 and (_ptok / _ctok) > 10.0 and _ctok >= _min_ctok:
             _pc_ratio = _ptok / _ctok
             _plw_frac = 0.05 / max(1.0, _pc_ratio / 5.0)
             _plw_frac = min(_plw_frac, 0.20 * _ctok / max(1.0, _ptok))
             from seq_quality_filter import stride_unmask_prompt
             train_ds.eval_dataset = stride_unmask_prompt(train_ds.eval_dataset, _plw_frac)
             log_info(f"[plw] prompt:completion={_pc_ratio:.1f}:1 → stride-unmask fraksi={_plw_frac:.4f}")
-        elif _ctok > 0 and (_ptok / _ctok) > 5.0:
+        elif _ctok > 0 and (_ptok / _ctok) > 10.0:
             log_info(
                 f"[plw] DILEWATI: completion rata-rata {_ctok:.0f} tok < {_min_ctok:.0f} "
                 f"— data prompt-dominan ber-completion pendek (pagar T2 7 Sep)"
